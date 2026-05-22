@@ -1,4 +1,4 @@
-"""Telegram alert delivery."""
+"""Telegram alert delivery (optional — console alerts work without it)."""
 import logging
 
 import requests
@@ -12,16 +12,14 @@ class TelegramNotifier:
         self.chat_id = chat_id
         self.timeout = timeout
         self.enabled = bool(token and chat_id)
-        if not self.enabled:
-            log.warning(
-                "Telegram not configured (TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID "
-                "missing); alerts will only be logged."
-            )
+        if self.enabled:
+            log.info("Telegram alerts enabled.")
+        else:
+            log.info("Telegram not configured; running in console-only mode.")
 
     def send(self, text):
-        """Send an HTML message. Returns True on success."""
+        """Send a plain-text message to Telegram. Returns True on success."""
         if not self.enabled:
-            log.info("ALERT (Telegram disabled):\n%s", text)
             return False
         url = f"https://api.telegram.org/bot{self.token}/sendMessage"
         for attempt in range(4):
@@ -32,7 +30,6 @@ class TelegramNotifier:
                     data={
                         "chat_id": self.chat_id,
                         "text": text,
-                        "parse_mode": "HTML",
                         "disable_web_page_preview": "true",
                     },
                 )

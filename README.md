@@ -1,9 +1,12 @@
 # TradingBot — Base Volume-Spike Alerter
 
-Watches tokens trading on the **Base** chain via the DexScreener API and sends a
-**Telegram alert** when a token jumps from a quiet 1-hour volume (under $1,000)
-straight to **six figures or more ($100,000+)**, while still holding enough
-liquidity to trade against.
+Watches tokens trading on the **Base** chain via the DexScreener API and raises
+an alert when a token jumps from a quiet 1-hour volume (under $1,000) straight
+to **six figures or more ($100,000+)**, while still holding enough liquidity to
+trade against.
+
+Alerts print to the console (and `bot.log`) out of the box — no setup needed.
+Telegram delivery is optional and can be added later.
 
 It is an *alerting* bot — it does not place trades.
 
@@ -24,19 +27,28 @@ restarts.
 
 ```bash
 pip install -r requirements.txt
-cp .env.example .env      # then fill in your Telegram bot token + chat id
 ```
 
-Get a bot token from [@BotFather](https://t.me/BotFather). Send your new bot a
-message, then read your chat id from
-`https://api.telegram.org/bot<TOKEN>/getUpdates`.
+That's it — the bot runs with console alerts only.
 
 ## Run
 
 ```bash
+python bot.py --once     # run a single cycle (handy for first test)
 python bot.py            # run continuously
-python bot.py --once     # run a single cycle (handy for testing)
 ```
+
+## Optional: Telegram alerts
+
+To also push alerts to Telegram, get a bot token from
+[@BotFather](https://t.me/BotFather), send your new bot a message, then read
+your chat id from `https://api.telegram.org/bot<TOKEN>/getUpdates`:
+
+```bash
+cp .env.example .env      # then fill in TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID
+```
+
+With those set, alerts go to both the console and Telegram.
 
 ## Configuration
 

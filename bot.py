@@ -6,7 +6,6 @@ alert when a token jumps from a quiet 1-hour volume (under $1000) to six
 figures or more ($100,000+), while holding sufficient liquidity.
 """
 import argparse
-import html
 import json
 import logging
 import os
@@ -114,27 +113,25 @@ def evaluate_pair(pair, cfg, pair_state, now):
 
 
 def format_alert(alert):
+    """Build a plain-text alert that reads well in a terminal and on Telegram."""
     pair = alert["pair"]
     token = pair.get("baseToken") or {}
-    name = html.escape(str(token.get("name", "?")))
-    symbol = html.escape(str(token.get("symbol", "?")))
+    name = token.get("name", "?")
+    symbol = token.get("symbol", "?")
     baseline = alert["baseline_volume"]
     spike = alert["spike_volume"]
-    multiple = spike / baseline if baseline > 0 else float("inf")
-    multiple_txt = "∞" if multiple == float("inf") else f"{multiple:,.0f}x"
-    price = pair.get("priceUsd", "?")
-    dex_id = html.escape(str(pair.get("dexId", "?")))
-    url = pair.get("url", "")
+    multiple = spike / baseline if baseline > 0 else None
+    multiple_txt = "from near-zero" if multiple is None else f"{multiple:,.0f}x"
 
     return (
-        "\U0001F6A8 <b>BASE VOLUME SPIKE</b> \U0001F6A8\n\n"
-        f"<b>{name} ({symbol})</b>\n"
+        "=== BASE VOLUME SPIKE ===\n"
+        f"{name} ({symbol})\n"
         f"Quiet 1h baseline: ${baseline:,.0f}\n"
-        f"Now 1h volume: <b>${spike:,.0f}</b> ({multiple_txt})\n"
-        f"Liquidity: ${alert['liquidity']:,.0f}\n"
-        f"Price: ${price}\n"
-        f"DEX: {dex_id}\n"
-        f"{url}"
+        f"Now 1h volume:     ${spike:,.0f} ({multiple_txt})\n"
+        f"Liquidity:         ${alert['liquidity']:,.0f}\n"
+        f"Price:             ${pair.get('priceUsd', '?')}\n"
+        f"DEX:               {pair.get('dexId', '?')}\n"
+        f"{pair.get('url', '')}"
     )
 
 
