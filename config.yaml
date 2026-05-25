@@ -1,0 +1,41 @@
+# Base-chain volume-spike alert bot configuration.
+# All volume / liquidity values are in USD and use DexScreener's 1-hour window.
+
+chain: base
+state_file: state.json
+
+# How often to re-check monitored tokens and to discover new ones.
+poll_interval_seconds: 120
+discovery_interval_seconds: 300
+
+# Discovery / polling limits.
+max_monitored_tokens: 5000
+request_batch_size: 30      # DexScreener tokens endpoint accepts up to 30 addresses
+batch_pause_seconds: 0.5    # small pause between batches to respect rate limits
+pair_state_ttl_seconds: 604800   # forget pairs not seen for 7 days
+
+# Extra search terms used to seed token discovery on Base.
+discovery_search_terms:
+  - base
+  - WETH
+  - USDC
+  - USDbC
+
+# Timeframes checked for the spike. DexScreener provides: m5, h1, h6, h24.
+# (h4 / h8 / h12 are not available from the API.)
+timeframes: [h1, h6, h24]
+
+# Spike detection rules.
+#
+# A token qualifies if:
+#   1. Its 1d (h24) volume has been under low_volume_max recently
+#      (i.e. it has been "sleeping" — baseline_lookback_seconds controls how
+#      recently we must have observed that quiet state).
+#   2. Any of the spike timeframes above now shows >= spike_volume_min.
+detection:
+  low_volume_max: 9999            # 1d volume must have been under this (3-4 figs, < $10k)
+  spike_volume_min: 10000         # any timeframe hitting this triggers an alert (5-6 figs)
+  max_market_cap_usd: 500000      # skip tokens with market cap above $500k
+  min_liquidity_usd: 20000        # ignore illiquid pools
+  baseline_lookback_seconds: 172800   # must have seen quiet 1d volume within last 48h
+  alert_cooldown_seconds: 86400   # don't re-alert same pair within 24h

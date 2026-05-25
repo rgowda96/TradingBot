@@ -1,0 +1,18 @@
+# secrets
+.env
+
+# runtime-generated files
+state.json
+state.json.tmp
+discovered_addresses.json
+discovered_addresses.json.tmp
+bot.log
+*.log
+
+# python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.egg-info/

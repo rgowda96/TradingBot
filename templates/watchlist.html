@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Watchlist — Base Gems</title>
+<style>
+  :root {
+    --bg:      #0d1117;
+    --card:    #161b22;
+    --border:  #30363d;
+    --text:    #e6edf3;
+    --muted:   #8b949e;
+    --accent:  #58a6ff;
+    --green:   #3fb950;
+    --red:     #f85149;
+    --yellow:  #d29922;
+    --hover:   #1f2937;
+    --badge:   #21262d;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size: 13px; }
+
+  /* ── TOP BAR ── */
+  .topbar {
+    position: sticky; top: 0; z-index: 100;
+    background: var(--card); border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 12px; padding: 10px 16px;
+  }
+  .logo { font-size: 16px; font-weight: 700; color: var(--text); white-space: nowrap; }
+  .logo span { color: var(--accent); }
+  .page-title {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 14px; font-weight: 600; color: var(--text);
+    padding: 4px 12px; background: var(--badge); border-radius: 6px;
+    border: 1px solid var(--border);
+  }
+  .page-title .dot-live {
+    width: 7px; height: 7px; border-radius: 50%; background: var(--green);
+    animation: pulse 2s infinite;
+  }
+  .spacer { flex: 1; }
+  .topbar-right { display: flex; align-items: center; gap: 10px; }
+  .status-text { font-size: 11px; color: var(--muted); white-space: nowrap; }
+  .btn {
+    padding: 6px 14px; border-radius: 6px; border: 1px solid var(--border);
+    background: var(--badge); color: var(--text); cursor: pointer; font-size: 12px;
+    transition: all 0.15s; text-decoration: none; display: inline-block;
+  }
+  .btn:hover { border-color: var(--accent); color: var(--accent); }
+
+  @keyframes pulse { 0%,100%{opacity:1}50%{opacity:.35} }
+  @keyframes spin  { to { transform: rotate(360deg); } }
+
+  /* ── CRITERIA BANNER ── */
+  .criteria-bar {
+    background: #0d1f2d; border-bottom: 1px solid #1a3a52;
+    padding: 10px 16px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  }
+  .criteria-label { font-size: 11px; font-weight: 600; color: #4a90c4; text-transform: uppercase; letter-spacing: .06em; }
+  .crit-pill {
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 3px 10px; border-radius: 20px;
+    background: #132030; border: 1px solid #1a3a52;
+    font-size: 11px; color: #7ec8f0; white-space: nowrap;
+  }
+  .crit-pill .icon { font-size: 10px; }
+
+  /* ── STATS ROW ── */
+  .stats-row {
+    padding: 8px 16px; border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 16px;
+    background: var(--card); font-size: 11px; color: var(--muted);
+  }
+  .stats-row strong { color: var(--text); font-size: 13px; }
+  .chain-badge {
+    padding: 2px 8px; border-radius: 4px; background: #1c2d3a;
+    border: 1px solid var(--accent); color: var(--accent);
+    font-size: 11px; font-weight: 700; text-transform: uppercase;
+  }
+
+  /* ── TOKEN CARDS ── */
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+    gap: 12px; padding: 16px;
+  }
+  .card {
+    background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+    padding: 14px 16px; cursor: pointer; transition: border-color 0.15s, background 0.15s;
+    display: flex; flex-direction: column; gap: 12px;
+    text-decoration: none; color: inherit;
+  }
+  .card:hover { border-color: var(--accent); background: var(--hover); }
+
+  .card-header { display: flex; align-items: center; gap: 10px; }
+  .token-img {
+    width: 38px; height: 38px; border-radius: 50%; object-fit: cover;
+    background: var(--badge); flex-shrink: 0; border: 2px solid var(--border);
+  }
+  .token-info { flex: 1; min-width: 0; }
+  .token-symbol { font-size: 15px; font-weight: 700; line-height: 1.2; }
+  .token-name   { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .token-badges { display: flex; gap: 4px; flex-wrap: wrap; }
+  .badge {
+    padding: 2px 6px; border-radius: 4px; font-size: 10px; font-weight: 600;
+    text-transform: uppercase; background: var(--badge); color: var(--muted); border: 1px solid var(--border);
+  }
+  .badge-boost  { background: #2d1f00; color: var(--yellow); border-color: #5a3e00; }
+  .badge-profile{ background: #0d2a1a; color: var(--green);  border-color: #1a4a2e; }
+
+  .price-block { text-align: right; }
+  .price { font-family: "SF Mono","Fira Code",monospace; font-size: 14px; font-weight: 600; }
+  .change { font-size: 12px; margin-top: 2px; }
+  .up   { color: var(--green); }
+  .down { color: var(--red); }
+  .flat { color: var(--muted); }
+
+  .card-metrics {
+    display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px;
+    background: var(--bg); border-radius: 8px; padding: 10px 12px;
+  }
+  .metric { display: flex; flex-direction: column; gap: 2px; }
+  .metric-label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+  .metric-value { font-size: 12px; font-weight: 600; color: var(--text); }
+
+  .card-footer {
+    display: flex; align-items: center; justify-content: space-between;
+    font-size: 11px; color: var(--muted); padding-top: 4px;
+    border-top: 1px solid var(--border);
+  }
+  .age-pill {
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 2px 8px; border-radius: 10px; background: var(--badge);
+    color: var(--muted); font-size: 10px;
+  }
+  .dex-name { text-transform: uppercase; font-size: 10px; font-weight: 600; color: var(--muted); }
+  .ext-link { color: var(--accent); font-size: 13px; text-decoration: none; }
+  .ext-link:hover { opacity: 0.7; }
+
+  /* ── MCAP HEAT BAR ── */
+  .mcap-bar-wrap { display: flex; align-items: center; gap: 8px; }
+  .mcap-bar-track {
+    flex: 1; height: 3px; background: var(--border); border-radius: 2px; overflow: hidden;
+  }
+  .mcap-bar-fill { height: 100%; border-radius: 2px; background: var(--accent); transition: width 0.4s; }
+  .mcap-label { font-size: 10px; color: var(--muted); white-space: nowrap; }
+
+  /* ── EMPTY / LOADING ── */
+  .empty {
+    display: flex; flex-direction: column; align-items: center;
+    justify-content: center; gap: 14px; padding: 80px 20px; color: var(--muted);
+  }
+  .spinner {
+    width: 30px; height: 30px; border: 3px solid var(--border);
+    border-top-color: var(--accent); border-radius: 50%; animation: spin 0.8s linear infinite;
+  }
+  .empty p { font-size: 14px; }
+  .empty small { font-size: 12px; color: var(--muted); }
+
+  /* ── REFRESH ANIM ── */
+  .refreshing .card { opacity: 0.55; transition: opacity 0.3s; }
+
+  @media (max-width: 480px) {
+    .grid { grid-template-columns: 1fr; padding: 10px; }
+    .card-metrics { grid-template-columns: 1fr 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<!-- TOP BAR -->
+<div class="topbar">
+  <div class="logo">DEX<span>Screener</span></div>
+  <div class="page-title">
+    <div class="dot-live"></div>
+    Base Watchlist
+  </div>
+  <div class="spacer"></div>
+  <div class="topbar-right">
+    <span class="status-text" id="statusText">Loading…</span>
+    <a href="/" class="btn">← Full Screener</a>
+  </div>
+</div>
+
+<!-- CRITERIA BANNER -->
+<div class="criteria-bar">
+  <span class="criteria-label">Active Filters</span>
+  <span class="crit-pill"><span class="icon">⛓</span> Base chain</span>
+  <span class="crit-pill"><span class="icon">💧</span> Liquidity ≥ $1,000</span>
+  <span class="crit-pill"><span class="icon">📊</span> MCap $10k – $500k</span>
+  <span class="crit-pill"><span class="icon">⏱</span> Age 100 – 3,000 hrs</span>
+  <span class="crit-pill"><span class="icon">📈</span> 24H Vol $1 – $10,000</span>
+  <span class="crit-pill"><span class="icon">🖼</span> Images only</span>
+</div>
+
+<!-- STATS -->
+<div class="stats-row">
+  <span class="chain-badge">BASE</span>
+  <span><strong id="countEl">—</strong> tokens matching</span>
+  <span>·</span>
+  <span><strong id="discCount">—</strong> addresses discovered</span>
+  <span id="updatedEl">—</span>
+  <span style="margin-left:auto;font-size:11px;color:var(--muted)">
+    Auto-refreshes every 30s &nbsp;·&nbsp; sorted by market cap ↑
+  </span>
+</div>
+
+<!-- TOKEN GRID -->
+<div class="grid" id="grid"></div>
+<div class="empty" id="emptyState">
+  <div class="spinner"></div>
+  <p id="emptyMsg">Fetching tokens from DexScreener…</p>
+  <small>Only tokens with profile images are shown</small>
+</div>
+
+<script>
+let countdown   = 30;
+let timerHandle = null;
+let lastUpdated = 0;
+
+// ── Formatters ──────────────────────────────────────────────────────────────
+function fmt(n, prefix='$') {
+  if (!n && n !== 0) return '—';
+  if (n === 0)  return '—';
+  if (n >= 1e6) return prefix + (n/1e6).toFixed(2) + 'M';
+  if (n >= 1e3) return prefix + (n/1e3).toFixed(1) + 'K';
+  return prefix + n.toFixed(0);
+}
+
+function fmtPrice(s) {
+  const n = parseFloat(s);
+  if (isNaN(n) || n === 0) return '—';
+  if (n < 0.000001) return '$' + n.toExponential(2);
+  if (n < 0.01)     return '$' + n.toPrecision(4);
+  if (n < 1)        return '$' + n.toFixed(5);
+  return '$' + n.toFixed(3);
+}
+
+function fmtAge(h) {
+  if (h === null || h === undefined) return '—';
+  if (h < 1)  return Math.round(h * 60) + 'm';
+  if (h < 24) return Math.floor(h) + 'h ' + Math.round((h % 1) * 60) + 'm';
+  const d = Math.floor(h / 24), r = Math.floor(h % 24);
+  return d + 'd ' + r + 'h';
+}
+
+function esc(s) {
+  return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// ── Render ──────────────────────────────────────────────────────────────────
+function renderGrid(tokens) {
+  const grid   = document.getElementById('grid');
+  const empty  = document.getElementById('emptyState');
+  const countEl = document.getElementById('countEl');
+
+  countEl.textContent = tokens.length;
+
+  if (!tokens.length) {
+    grid.innerHTML = '';
+    empty.style.display = 'flex';
+    document.getElementById('emptyMsg').textContent =
+      'No tokens match all criteria right now — checking again soon.';
+    return;
+  }
+  empty.style.display = 'none';
+
+  // mcap bar: scale against 500k max
+  const MCAP_MAX = 500_000;
+
+  grid.innerHTML = tokens.map(t => {
+    const chg = t.change_h24 || 0;
+    const chgClass = chg > 0 ? 'up' : chg < 0 ? 'down' : 'flat';
+    const chgStr   = chg ? (chg > 0 ? '+' : '') + chg.toFixed(2) + '%' : '—';
+    const mcapPct  = Math.min(100, ((t.market_cap || 0) / MCAP_MAX) * 100).toFixed(1);
+
+    const boostBadge   = t.has_boost   ? '<span class="badge badge-boost">⚡ Boosted</span>' : '';
+    const profileBadge = t.has_profile ? '<span class="badge badge-profile">✓ Profile</span>' : '';
+
+    return `
+    <a class="card" href="${esc(t.url)}" target="_blank" rel="noopener">
+      <div class="card-header">
+        <img class="token-img" src="${esc(t.icon)}" alt=""
+             onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 40 40%22><rect width=%2240%22 height=%2240%22 rx=%2220%22 fill=%22%2321262d%22/></svg>'">
+        <div class="token-info">
+          <div class="token-symbol">${esc(t.symbol)}</div>
+          <div class="token-name">${esc(t.name)}</div>
+          <div class="token-badges" style="margin-top:4px">${boostBadge}${profileBadge}</div>
+        </div>
+        <div class="price-block">
+          <div class="price">${fmtPrice(t.price_usd)}</div>
+          <div class="change ${chgClass}">${chgStr}</div>
+        </div>
+      </div>
+
+      <div class="card-metrics">
+        <div class="metric">
+          <span class="metric-label">Market Cap</span>
+          <span class="metric-value">${fmt(t.market_cap)}</span>
+        </div>
+        <div class="metric">
+          <span class="metric-label">Liquidity</span>
+          <span class="metric-value">${fmt(t.liquidity)}</span>
+        </div>
+        <div class="metric">
+          <span class="metric-label">24H Volume</span>
+          <span class="metric-value">${fmt(t.vol_h24)}</span>
+        </div>
+        <div class="metric">
+          <span class="metric-label">24H Txns</span>
+          <span class="metric-value">${t.txns_h24 || '—'}</span>
+        </div>
+        <div class="metric">
+          <span class="metric-label">Buys / Sells</span>
+          <span class="metric-value">${t.buys_h24 || 0} / ${t.sells_h24 || 0}</span>
+        </div>
+        <div class="metric">
+          <span class="metric-label">FDV</span>
+          <span class="metric-value">${fmt(t.fdv)}</span>
+        </div>
+      </div>
+
+      <div class="mcap-bar-wrap">
+        <span class="mcap-label">MCap scale</span>
+        <div class="mcap-bar-track">
+          <div class="mcap-bar-fill" style="width:${mcapPct}%"></div>
+        </div>
+        <span class="mcap-label">${mcapPct}%</span>
+      </div>
+
+      <div class="card-footer">
+        <span class="age-pill">⏱ ${fmtAge(t.age_hours)}</span>
+        <span class="dex-name">${esc(t.dex)}</span>
+        <span class="ext-link">↗ DexScreener</span>
+      </div>
+    </a>`;
+  }).join('');
+}
+
+// ── Fetch ───────────────────────────────────────────────────────────────────
+async function fetchWatchlist() {
+  try {
+    const r    = await fetch('/api/watchlist');
+    const data = await r.json();
+    lastUpdated = data.last_updated * 1000;
+    renderGrid(data.tokens);
+    const dc = document.getElementById('discCount');
+    if (dc) dc.textContent = (data.discovered_count || 0).toLocaleString();
+    resetTimer();
+  } catch(e) {
+    console.error(e);
+    document.getElementById('statusText').textContent = 'Fetch failed — retrying…';
+  }
+}
+
+// ── Countdown ────────────────────────────────────────────────────────────────
+function resetTimer() {
+  countdown = 30;
+  if (timerHandle) clearInterval(timerHandle);
+  timerHandle = setInterval(() => {
+    countdown--;
+    const ago = lastUpdated
+      ? Math.round((Date.now() - lastUpdated) / 1000)
+      : null;
+    const agoStr = ago !== null ? (ago < 5 ? 'just now' : ago + 's ago') : '';
+    document.getElementById('statusText').textContent =
+      (agoStr ? 'Updated ' + agoStr + '  ·  ' : '') + 'refresh in ' + countdown + 's';
+    const d = document.getElementById('updatedEl');
+    d.textContent = agoStr ? 'Last update: ' + agoStr : '';
+    if (countdown <= 0) fetchWatchlist();
+  }, 1000);
+}
+
+// ── Init ─────────────────────────────────────────────────────────────────────
+fetchWatchlist();
+</script>
+</body>
+</html>
