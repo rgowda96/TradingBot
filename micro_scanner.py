@@ -169,11 +169,15 @@ def fetch_gt_pools(chain: str, sort: str, pages: int,
         try:
             r = requests.get(url, timeout=20, headers=headers)
             if r.status_code == 429:
-                print(f"    [GT/{chain}/{sort[:6]}] Rate limit p{page} — wait 30s", flush=True)
-                time.sleep(30)
+                print(f"    [GT/{chain}/{sort[:8]}] Rate limited p{page} — wait 35s", flush=True)
+                time.sleep(35)
                 r = requests.get(url, timeout=20, headers=headers)
+            if r.status_code == 400:
+                print(f"    [GT/{chain}/{sort[:8]}] Bad sort param '{sort}' — skipping", flush=True)
+                break
             if r.status_code != 200:
-                print(f"    [GT/{chain}/{sort[:6]}] HTTP {r.status_code} p{page}", flush=True)
+                print(f"    [GT/{chain}/{sort[:8]}] HTTP {r.status_code} p{page} — "
+                      f"body: {r.text[:120]}", flush=True)
                 break
 
             data = r.json().get("data", [])
@@ -784,31 +788,37 @@ def main():
             print(f"  [SKIP] Unknown chain: {chain}")
             continue
 
-        # GT trending
-        print(f"  [GT/{chain.upper()}] trending pools...")
+        # GT trending (trending score)
+        print(f"  [GT/{chain.upper()}] trending pools...", flush=True)
         p1 = fetch_gt_pools(chain, "trending", args.pages,
                              args.min_mcap, args.max_mcap,
                              args.min_liq, args.min_vol, args.min_age)
-        print(f"  → {len(p1)} pools")
+        print(f"  → {len(p1)} pools", flush=True)
 
-        # GT 6H movers (different from trending — catches pumps before they trend)
-        print(f"  [GT/{chain.upper()}] 6H price change sort...")
-        p2 = fetch_gt_pools(chain, "h6_price_change_percent_desc", args.pages,
+        # GT 24H volume (sustained buying interest)
+        print(f"  [GT/{chain.upper()}] 24H volume sort...", flush=True)
+        p2 = fetch_gt_pools(chain, "h24_volume_usd_desc", min(args.pages, 3),
                              args.min_mcap, args.max_mcap,
                              args.min_liq, args.min_vol, args.min_age)
-        print(f"  → {len(p2)} pools")
+        print(f"  → {len(p2)} pools", flush=True)
 
-        # GT 24H volume (sustained interest)
-        print(f"  [GT/{chain.upper()}] 24H volume sort...")
-        p3 = fetch_gt_pools(chain, "h24_volume_usd_desc", min(args.pages, 3),
+        # GT 24H transaction count (most active = real users buying)
+        print(f"  [GT/{chain.upper()}] 24H tx count sort...", flush=True)
+        p3 = fetch_gt_pools(chain, "h24_tx_count_desc", min(args.pages, 3),
                              args.min_mcap, args.max_mcap,
                              args.min_liq, args.min_vol, args.min_age)
-        print(f"  → {len(p3)} pools\n")
+        print(f"  → {len(p3)} pools\n", flush=True)
 
         all_pools.extend(p1 + p2 + p3)
 
     all_pools = dedup_pools(all_pools)
-    print(f"  After dedup: {len(all_pools)} unique pools\n")
+    # Client-side re-sort by 6H change so best movers float to top
+    # (GT API doesn't support h6 sort server-side)
+    all_pools.sort(
+        key=lambda p: safe_float((p.get("attributes", {}).get("price_change_percentage") or {}).get("h6")),
+        reverse=True
+    )
+    print(f"  After dedup + 6H sort: {len(all_pools)} unique pools\n", flush=True)
 
     # DeFiLlama Base protocols
     print("  [DeFiLlama] Base protocols with growing TVL...")
