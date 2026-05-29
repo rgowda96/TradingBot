@@ -4,11 +4,17 @@ meta_scanner.py — 3-day crypto meta intelligence report
 ========================================================
 
 Runs on a schedule (every 3 days) and produces a full market brief:
-  1. Base-chain micro-cap tokens with momentum (CoinGecko)
+  1. Multi-source token fetch (CoinGecko 10 categories + DeFiLlama TVL)
   2. Narrative classification — what meta is forming or dying
-  3. DexScreener boosted / profiled signals
-  4. Phase estimate (Seed → Sprout → Named → Parabolic → Death)
-  5. Dated .md report committed to repo for history
+  3. DeFiLlama TVL signal per narrative (protocols growing TVL = narrative forming)
+  4. DexScreener boosted / profiled signals
+  5. Phase estimate (Seed → Sprout → Named → Parabolic → Death)
+  6. Dated .md report committed to repo for history
+
+DATA SOURCES:
+  - CoinGecko: 10 narrative categories (not just base-ecosystem)
+  - DeFiLlama: TVL growth per narrative (pre-token-pump signal)
+  - DexScreener: boosts + profiles (paid backing)
 
 Usage:
     python meta_scanner.py                    # prints to stdout + saves dated .md
@@ -157,45 +163,177 @@ def phase_label(avg_score: float) -> str:
 # Data fetchers
 # ─────────────────────────────────────────────────────────────────────────────
 
-def fetch_cg_base(pages: int, min_mcap: float, max_mcap: float) -> list:
-    """CoinGecko Base ecosystem tokens filtered to MCap range."""
-    coins = []
-    seen  = set()
-    headers = {"Accept": "application/json"}
-    for page in range(1, pages + 1):
-        url = (
-            "https://api.coingecko.com/api/v3/coins/markets"
-            f"?vs_currency=usd&category=base-ecosystem"
-            f"&order=market_cap_desc&per_page=100&page={page}"
-            "&sparkline=false&price_change_percentage=24h,7d"
-        )
-        try:
-            r = requests.get(url, timeout=25, headers=headers)
-            if r.status_code == 429:
-                print("  [CG] Rate limited — sleeping 65s", flush=True)
-                time.sleep(65)
+# CoinGecko categories to sweep — ordered by narrative relevance
+# Each maps to a narrative bucket so tokens found here get tagged
+CG_CATEGORIES = [
+    ("base-ecosystem",        None),          # Base chain tokens (primary)
+    ("artificial-intelligence", "AI_AGENTS"), # AI narrative
+    ("depin",                 "DEPIN"),        # DePIN narrative
+    ("real-world-assets-rwa", "RWA"),          # RWA narrative
+    ("gaming",                "GAMING"),       # Gaming narrative
+    ("yield-aggregator",      "YIELD"),        # Yield narrative
+    ("tokenized-gold",        "RWA"),          # Gold-backed = RWA sub
+    ("decentralized-exchange","DEV_TOOLS"),    # DEX = infra
+    ("layer-2",               "DEV_TOOLS"),    # L2 tokens
+    ("cross-chain-communication", "DEV_TOOLS"),# Cross-chain infra
+]
+
+
+def fetch_cg_multi_category(pages: int, min_mcap: float, max_mcap: float) -> list:
+    """
+    Fetch from MULTIPLE CoinGecko categories (not just base-ecosystem).
+    Each coin is tagged with which category/narrative it was found in.
+    Rate-limit safe: 2.5s between requests, backs off on 429.
+    """
+    all_coins = []
+    seen      = set()
+    headers   = {"Accept": "application/json"}
+    backoff   = 0
+
+    for cat_slug, narrative_hint in CG_CATEGORIES:
+        print(f"    [CG/{cat_slug}] fetching...", flush=True)
+        cat_added = 0
+
+        for page in range(1, pages + 1):
+            if backoff > 0:
+                print(f"    [CG] backing off {backoff}s...", flush=True)
+                time.sleep(backoff)
+                backoff = 0
+
+            url = (
+                "https://api.coingecko.com/api/v3/coins/markets"
+                f"?vs_currency=usd&category={cat_slug}"
+                f"&order=volume_desc&per_page=100&page={page}"
+                "&sparkline=false&price_change_percentage=24h,7d"
+            )
+            try:
                 r = requests.get(url, timeout=25, headers=headers)
-            if r.status_code != 200:
-                print(f"  [CG] page {page} → HTTP {r.status_code}", flush=True)
+                if r.status_code == 429:
+                    backoff = 70
+                    print(f"    [CG/{cat_slug}] rate limited — will back off", flush=True)
+                    break
+                if r.status_code != 200:
+                    print(f"    [CG/{cat_slug}] HTTP {r.status_code} p{page}", flush=True)
+                    break
+                data = r.json()
+                if not data or not isinstance(data, list):
+                    break
+
+                for c in data:
+                    cid = c.get("id", "")
+                    if cid in seen:
+                        continue
+                    mcap = c.get("market_cap") or 0
+                    if min_mcap <= mcap <= max_mcap:
+                        c["_cg_category"]    = cat_slug
+                        c["_narrative_hint"] = narrative_hint
+                        all_coins.append(c)
+                        seen.add(cid)
+                        cat_added += 1
+
+                time.sleep(2.5)
+                if len(data) < 50:
+                    break  # last page
+
+            except Exception as e:
+                print(f"    [CG/{cat_slug}] p{page} error: {e}", flush=True)
                 break
-            data = r.json()
-            if not data:
-                break
-            added = 0
-            for c in data:
-                if c["id"] in seen:
-                    continue
-                mcap = c.get("market_cap") or 0
-                if min_mcap <= mcap <= max_mcap:
-                    coins.append(c)
-                    seen.add(c["id"])
-                    added += 1
-            print(f"  [CG] page {page}: +{added} coins ({len(coins)} total)", flush=True)
-            time.sleep(2.2)
-        except Exception as e:
-            print(f"  [CG] page {page} error: {e}", flush=True)
-            break
-    return coins
+
+        print(f"    [CG/{cat_slug}] +{cat_added} tokens", flush=True)
+        time.sleep(2.5)  # between categories
+
+    print(f"  [CG total] {len(all_coins)} unique tokens across {len(CG_CATEGORIES)} categories", flush=True)
+    return all_coins
+
+
+def fetch_defillama_narrative_signal(min_tvl: float = 100_000,
+                                      max_tvl: float = 100_000_000,
+                                      min_1d_change: float = 3.0) -> dict:
+    """
+    DeFiLlama protocols with growing TVL — grouped by which narrative they support.
+    Key signal: TVL growing in a category BEFORE tokens in that category pump.
+    This is the leading indicator that retail hasn't seen yet.
+    Returns dict: narrative_key -> list of protocol dicts
+    """
+    try:
+        r = requests.get("https://api.llama.fi/protocols", timeout=25)
+        if r.status_code != 200:
+            print(f"    [DeFiLlama] HTTP {r.status_code}", flush=True)
+            return {}
+        protocols = r.json()
+    except Exception as e:
+        print(f"    [DeFiLlama] Error: {e}", flush=True)
+        return {}
+
+    # Narrative keyword mapping for protocol names/descriptions
+    LLAMA_NARRATIVE_MAP = {
+        "AI_AGENTS":  ["ai", "agent", "intelligence", "llm", "neural", "gpt", "ml"],
+        "DEPIN":      ["depin", "network", "bandwidth", "gpu", "compute", "hotspot", "physical"],
+        "RWA":        ["rwa", "real world", "tokenized", "backed", "treasury", "bond", "gold"],
+        "GAMING":     ["game", "gaming", "nft", "metaverse", "play"],
+        "YIELD":      ["yield", "stake", "liquid", "restake", "vault", "lending", "borrow"],
+        "DEV_TOOLS":  ["bridge", "oracle", "index", "rollup", "sequencer", "cross-chain"],
+        "PAYMENTS":   ["payment", "transfer", "stablecoin", "remittance"],
+        "ZK":         ["zk", "zero knowledge", "privacy", "proof"],
+    }
+
+    by_narrative: dict = defaultdict(list)
+
+    for p in protocols:
+        # Must include Base chain
+        chains = p.get("chains") or []
+        if "Base" not in chains:
+            continue
+
+        tvl = float(p.get("tvl") or 0)
+        if not (min_tvl <= tvl <= max_tvl):
+            continue
+
+        change_1d = float(p.get("change_1d") or 0)
+        if change_1d < min_1d_change:
+            continue
+
+        name_lower = (p.get("name") or "").lower()
+        desc_lower = (p.get("description") or "").lower()
+        combined   = f"{name_lower} {desc_lower}"
+
+        matched = False
+        for bucket, keywords in LLAMA_NARRATIVE_MAP.items():
+            if any(kw in combined for kw in keywords):
+                by_narrative[bucket].append({
+                    "name":       p.get("name", "?"),
+                    "symbol":     p.get("symbol", "—"),
+                    "tvl":        tvl,
+                    "change_1d":  change_1d,
+                    "change_7d":  float(p.get("change_7d") or 0),
+                    "chains":     chains,
+                    "has_token":  bool(p.get("symbol") and p.get("symbol") != "-"),
+                    "url":        p.get("url", ""),
+                })
+                matched = True
+                break  # assign to first matching bucket only
+
+        if not matched:
+            # Put uncategorised Base protocols under DEV_TOOLS as catch-all
+            by_narrative["DEV_TOOLS"].append({
+                "name":      p.get("name", "?"),
+                "symbol":    p.get("symbol", "—"),
+                "tvl":       tvl,
+                "change_1d": change_1d,
+                "change_7d": float(p.get("change_7d") or 0),
+                "has_token": bool(p.get("symbol") and p.get("symbol") != "-"),
+            })
+
+    # sort each bucket by 7D TVL growth then 1D
+    for bucket in by_narrative:
+        by_narrative[bucket].sort(
+            key=lambda x: (-(x["change_7d"] if x["change_7d"] > 0 else 0), -x["change_1d"])
+        )
+
+    total = sum(len(v) for v in by_narrative.values())
+    print(f"    [DeFiLlama] {total} Base protocols growing across "
+          f"{len(by_narrative)} narrative buckets", flush=True)
+    return dict(by_narrative)
 
 
 def fetch_dex_base_signals() -> list:
@@ -229,18 +367,24 @@ def fetch_dex_base_signals() -> list:
 # Report builder
 # ─────────────────────────────────────────────────────────────────────────────
 
-def build_report(coins: list, dex_signals: list, run_date: str,
-                 min_mcap: float, max_mcap: float) -> str:
+def build_report(coins: list, dex_signals: list, llama_by_narrative: dict,
+                 run_date: str, min_mcap: float, max_mcap: float) -> str:
     lines = []
     lines.append(f"# 🧠 Crypto Meta Intelligence Report")
-    lines.append(f"**Date:** {run_date}  |  **Scope:** Base chain  |  "
-                 f"**MCap range:** ${min_mcap/1e6:.2f}M – ${max_mcap/1e6:.0f}M\n")
+    lines.append(
+        f"**Date:** {run_date}  |  **MCap range:** ${min_mcap/1e6:.2f}M – ${max_mcap/1e6:.0f}M\n"
+    )
+    lines.append("**Sources:** CoinGecko (10 categories) · DeFiLlama TVL signal · DexScreener\n")
     lines.append("---\n")
 
     # ── filter memes ──────────────────────────────────────────────────────────
     legit  = [c for c in coins if not _is_meme(c.get("name",""), c.get("symbol",""))]
     memes  = [c for c in coins if     _is_meme(c.get("name",""), c.get("symbol",""))]
-    lines.append(f"*Scanned {len(coins)} tokens — {len(legit)} legit, {len(memes)} meme filtered*\n")
+    cg_cats = len(set(c.get("_cg_category","?") for c in coins))
+    lines.append(
+        f"*Scanned {len(coins)} tokens from {cg_cats} CoinGecko categories — "
+        f"{len(legit)} legit, {len(memes)} meme filtered*\n"
+    )
 
     # ── narrative buckets ──────────────────────────────────────────────────────
     bucket_map: dict = defaultdict(list)
@@ -320,6 +464,31 @@ def build_report(coins: list, dex_signals: list, run_date: str,
             lines.append(f"- {tag} **{name}** — {url}")
         lines.append("")
 
+    # ── Section 4b: DeFiLlama TVL narrative signal ───────────────────────────
+    if llama_by_narrative:
+        lines.append("## 📊 DeFiLlama TVL Signal — Protocols Building Quietly\n")
+        lines.append("*TVL growing in a narrative BEFORE token price moves = leading indicator*\n")
+
+        # Summarise each narrative bucket that has DeFiLlama activity
+        for bucket_key, protos in sorted(
+            llama_by_narrative.items(),
+            key=lambda x: sum(p["change_7d"] for p in x[1] if p["change_7d"] > 0),
+            reverse=True
+        )[:6]:
+            label = NARRATIVE_BUCKETS.get(bucket_key, ([], bucket_key))[1]
+            top   = protos[:3]
+            total_tvl = sum(p["tvl"] for p in protos)
+            avg_1d    = sum(p["change_1d"] for p in protos) / len(protos)
+            lines.append(f"### {label} — {len(protos)} protocols, "
+                         f"TVL ${total_tvl:,.0f}, avg +{avg_1d:.1f}%/day")
+            for p in top:
+                tok = f" ({p['symbol']})" if p.get("has_token") and p["symbol"] != "—" else " [no token yet]"
+                lines.append(
+                    f"  - **{p['name']}{tok}** TVL ${p['tvl']:,.0f} | "
+                    f"1D {p['change_1d']:+.1f}% | 7D {p['change_7d']:+.1f}%"
+                )
+            lines.append("")
+
     # ── Section 5: The meta verdict ────────────────────────────────────────────
     lines.append("## 🎯 The Meta Verdict\n")
     if bucket_rows:
@@ -389,18 +558,24 @@ def main():
     print(f"\n{sep}")
     print(f"  🧠 Meta Scanner  {run_date}")
     print(f"  Range: ${args.min_mcap/1e6:.2f}M – ${args.max_mcap/1e6:.0f}M MCap")
+    print(f"  Sources: CoinGecko ({len(CG_CATEGORIES)} categories) · DeFiLlama · DexScreener")
     print(f"{sep}\n")
 
-    print("  [1/3] Fetching Base ecosystem from CoinGecko...")
-    coins = fetch_cg_base(args.pages, args.min_mcap, args.max_mcap)
-    print(f"  → {len(coins)} tokens in range\n")
+    print("  [1/3] Fetching from CoinGecko (10 categories, rate-limit aware)...")
+    coins = fetch_cg_multi_category(args.pages, args.min_mcap, args.max_mcap)
+    print(f"  → {len(coins)} unique tokens\n")
 
-    print("  [2/3] Fetching DexScreener Base signals...")
+    print("  [2/3] Fetching DeFiLlama TVL narrative signal...")
+    llama_by_narrative = fetch_defillama_narrative_signal()
+    print(f"  → {sum(len(v) for v in llama_by_narrative.values())} protocols across "
+          f"{len(llama_by_narrative)} narratives\n")
+
+    print("  [3/4] Fetching DexScreener Base signals...")
     dex = fetch_dex_base_signals()
     print(f"  → {len(dex)} signals\n")
 
-    print("  [3/3] Building meta report...")
-    report = build_report(coins, dex, run_date, args.min_mcap, args.max_mcap)
+    print("  [4/4] Building meta report...")
+    report = build_report(coins, dex, llama_by_narrative, run_date, args.min_mcap, args.max_mcap)
 
     print(f"\n{sep}\n")
     print(report)
