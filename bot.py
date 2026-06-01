@@ -32,6 +32,7 @@ import logging
 import os
 import re
 import time
+from datetime import datetime, timezone
 
 import requests
 
@@ -40,6 +41,63 @@ from dexscreener import DexScreener
 from notifier import TelegramNotifier
 
 log = logging.getLogger("bot")
+
+SIGNAL_LOG_FILE = "signal_log.jsonl"
+
+
+# ---------------------------------------------------------------------------
+# Signal logging — RL feedback loop
+# ---------------------------------------------------------------------------
+
+def _log_signal(alert, cfg_chain="base"):
+    """Append one JSON line to signal_log.jsonl every time a Telegram alert fires.
+
+    Fields captured are exactly what signal_tracker.py needs to compute outcomes:
+      ts, date, token, name, symbol, chain, signal_type, conviction, mcap,
+      price, liq, age_days, dims, h1_vol, h24_vol, pair_url
+    """
+    pair  = alert.get("pair") or {}
+    token = pair.get("baseToken") or {}
+    dims  = alert.get("conv_dims") or {}
+    record = {
+        "ts":          time.time(),
+        "date":        datetime.now(tz=timezone.utc).isoformat(),
+        "token":       token.get("address", ""),
+        "name":        token.get("name", "?"),
+        "symbol":      token.get("symbol", "?"),
+        "chain":       cfg_chain,
+        "signal_type": alert.get("type", "unknown"),
+        "conviction":  alert.get("conviction", 0.0),
+        "mcap":        alert.get("market_cap") or 0,
+        "price":       _safe_float(pair.get("priceUsd")),
+        "liq":         alert.get("liquidity", 0),
+        "age_days":    alert.get("pair_age_days"),
+        "h1_vol":      alert.get("h1_vol", 0),
+        "h24_vol":     alert.get("h24_vol", 0),
+        "buy_ratio":   alert.get("buy_ratio"),
+        "dims": {
+            "organic":    dims.get("organic",    0.0),
+            "tokenomics": dims.get("tokenomics", 0.0),
+            "maturity":   dims.get("maturity",   0.0),
+            "momentum":   dims.get("momentum",   0.0),
+        },
+        "pair_url": pair.get("url", ""),
+    }
+    try:
+        with open(SIGNAL_LOG_FILE, "a") as fh:
+            fh.write(json.dumps(record) + "\n")
+    except OSError as exc:
+        log.warning("signal_log write failed: %s", exc)
+
+
+def _safe_float(v):
+    """Convert a value to float, returning None on failure."""
+    if v is None:
+        return None
+    try:
+        return float(v)
+    except (ValueError, TypeError):
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -1890,7 +1948,13 @@ def evaluate_token(token_data, cfg, token_state, now):
 
 
 # ---------------------------------------------------------------------------
-# Alert formatting
+# Alert formatting — tiered, actionable Telegram messages
+#
+# Tier system:
+#   🌱 WATCH  — early accumulation signals (act small, set alerts)
+#   ⚡ ENTRY  — primary entry signals (size in now)
+#   🔥 RIDE   — continuation signals (add or hold)
+#   📊 INFO   — factual milestones (no action required)
 # ---------------------------------------------------------------------------
 
 def _token_header(pair):
@@ -1902,7 +1966,7 @@ def _conviction_bar(score):
     filled = round(score)
     bar    = "█" * filled + "░" * (10 - filled)
     tier   = "HIGH 🔥" if score >= 7 else ("MED 👀" if score >= 4 else "LOW")
-    return f"[{bar}] {score}/10  {tier}"
+    return f"{bar} {score:.1f}/10 {tier}"
 
 
 def _dim_bar(score):
@@ -1911,102 +1975,198 @@ def _dim_bar(score):
     return "■" * cells + "□" * (5 - cells)
 
 
-def _common_footer(alert):
-    buy_ratio  = alert.get("buy_ratio")
-    buy_txt    = f"{buy_ratio * 100:.0f}% buys" if buy_ratio is not None else "n/a"
-    quiet_days = alert.get("quiet_days", 0)
-    quiet_txt  = f"{quiet_days:.0f}d" if quiet_days >= 1 else "<1d"
-    pair       = alert["pair"]
-    mcap       = alert.get("market_cap")
-    if mcap and mcap > 0:
-        mult = 10_000_000 / mcap
-        mcap_txt = f"${mcap:,.0f}  [{mult:,.0f}× to $10M]"
-    else:
-        mcap_txt = "n/a"
-    pchg       = alert.get("price_change") or {}
-    chg_txt    = (f"m5 {pchg.get('m5', '?')}%  h1 {pchg.get('h1', '?')}%  "
-                  f"h6 {pchg.get('h6', '?')}%  h24 {pchg.get('h24', '?')}%")
-    token      = pair.get("baseToken") or {}
-    contract   = token.get("address", "?")
+def _mcap_line(mcap):
+    """Return compact mcap + multiplier string."""
+    if not mcap or mcap <= 0:
+        return "mcap n/a"
+    mult = 10_000_000 / mcap
+    if mcap >= 1_000_000:
+        return f"${mcap/1_000_000:.1f}M mcap · {mult:.0f}× to $10M"
+    if mcap >= 1_000:
+        return f"${mcap/1_000:.0f}K mcap · {mult:.0f}× to $10M"
+    return f"${mcap:.0f} mcap · {mult:.0f}× to $10M"
 
-    # Quality metadata
-    age_days     = alert.get("pair_age_days")
-    age_txt      = f"{age_days:.0f}d" if age_days is not None else "n/a"
-    web_txt      = "✓" if alert.get("has_website") else "✗"
+
+def _trade_plan(mcap, signal_type):
+    """Return a simple trade-plan line calibrated to current mcap."""
+    if not mcap or mcap <= 0:
+        return "Entry: now  ·  Stop: −35%"
+
+    # Target: 3× and 10× from current mcap
+    t1 = mcap * 3
+    t2 = mcap * 10
+    t1_s = f"${t1/1_000:.0f}K" if t1 < 1_000_000 else f"${t1/1_000_000:.1f}M"
+    t2_s = f"${t2/1_000:.0f}K" if t2 < 1_000_000 else f"${t2/1_000_000:.1f}M"
+
+    if signal_type in ("slow_build_accumulation", "pre_breakout_coil"):
+        size_note = "small (early watch)"
+    elif signal_type in ("sleeping_giant_wakeup", "volume_surge", "resistance_breakout"):
+        size_note = "normal entry"
+    elif signal_type in ("momentum_continuation", "dead_token_resurrection"):
+        size_note = "add / hold existing"
+    else:
+        size_note = "normal entry"
+
+    return (f"Entry: now ({size_note})  ·  "
+            f"Targets: {t1_s} mcap (+200%) → {t2_s} (+900%)  ·  Stop: −35%")
+
+
+def _build_alert_body(alert, tier_header: str, why_text: str) -> str:
+    """Assemble a complete tiered Telegram alert message.
+
+    Structure:
+        {tier_header}
+        ━━━━━━━━━━━━━━━
+        Name (SYM) · BASE · $XXK mcap · 234× to $10M
+
+        WHY: {why_text}
+
+        📊 Conviction: ████████░░ X.X/10 HIGH
+        📐 Org X.X · Tok X.X · Mat X.X · Mom X.X
+
+        📈 $price  m5 ±X%  h1 ±X%  h24 ±X%
+        💧 Liq $X  ·  Vol h1 $X  ·  Txns/d X  ·  Age Xd
+        🔗 Socials  ·  Web ✓/✗  ·  FDV/MCap X.X×  ·  Buys X% h1
+
+        📋 TRADE PLAN
+           {trade_plan}
+
+        Contract: 0x...
+        {url}
+    """
+    pair     = alert["pair"]
+    name, symbol = _token_header(pair)
+    mcap     = alert.get("market_cap") or 0
+    liq      = alert.get("liquidity", 0)
+    stype    = alert.get("type", "")
+    conv     = alert.get("conviction", 0.0)
+
+    # Price + changes
+    price_usd = pair.get("priceUsd", "?")
+    pchg      = alert.get("price_change") or {}
+    m5_c  = pchg.get("m5",  "?")
+    h1_c  = pchg.get("h1",  "?")
+    h24_c = pchg.get("h24", "?")
+    def fmt_pct(v):
+        if v == "?" or v is None:
+            return "?"
+        try:
+            f = float(v)
+            return f"{f:+.1f}%"
+        except (ValueError, TypeError):
+            return str(v)
+    price_line = (f"📈 ${price_usd}  "
+                  f"m5 {fmt_pct(m5_c)}  h1 {fmt_pct(h1_c)}  h24 {fmt_pct(h24_c)}")
+
+    # Liquidity + volume
+    h1_vol   = alert.get("h1_vol") or alert.get("surge_vol", 0)
+    h1_vol_s = f"${h1_vol:,.0f}" if h1_vol else "n/a"
+    txns_h24 = alert.get("txns_h24", 0)
+    age_days = alert.get("pair_age_days")
+    age_s    = f"{age_days:.0f}d" if age_days is not None else "n/a"
+    liq_line = (f"💧 Liq ${liq:,.0f}  ·  Vol h1 {h1_vol_s}  "
+                f"·  {txns_h24:,} txns/d  ·  Age {age_s}")
+
+    # Socials + quality
     socials      = alert.get("social_types") or []
     social_icons = {"twitter": "𝕏", "telegram": "TG", "discord": "DC"}
-    social_txt   = " ".join(social_icons.get(s, s.upper()) for s in socials) or "none"
-    txns_h24     = alert.get("txns_h24", 0)
-    accel_txt    = "↑accel" if alert.get("vol_accelerating") else "flat"
+    social_s     = " ".join(social_icons.get(s, s.upper()) for s in socials) or "none"
+    web_s        = "Web ✓" if alert.get("has_website") else "Web ✗"
+    buy_ratio    = alert.get("buy_ratio")
+    buy_s        = f"Buys {buy_ratio*100:.0f}% h1" if buy_ratio is not None else ""
+    fdv          = alert.get("fdv_mcap_ratio")
+    fdv_s        = f"FDV/MCap {fdv:.1f}×" if fdv else ""
+    quality_parts = [s for s in [social_s, web_s, fdv_s, buy_s] if s]
+    quality_line  = "🔗 " + "  ·  ".join(quality_parts)
 
-    # 4-dimension conviction breakdown
-    dims = alert.get("conv_dims") or {}
+    # Conviction bar
+    conv_line = f"📊 Conviction: {_conviction_bar(conv)}"
+
+    # Dimensions
+    dims  = alert.get("conv_dims") or {}
     d_org = dims.get("organic",    0.0)
     d_tok = dims.get("tokenomics", 0.0)
     d_mat = dims.get("maturity",   0.0)
     d_mom = dims.get("momentum",   0.0)
-    dim_txt = (
-        f"  🔄 Organic:    {_dim_bar(d_org)} {d_org:.1f}  "
-        f"💎 Tokenomics: {_dim_bar(d_tok)} {d_tok:.1f}\n"
-        f"  ⏳ Maturity:   {_dim_bar(d_mat)} {d_mat:.1f}  "
-        f"⚡ Momentum:   {_dim_bar(d_mom)} {d_mom:.1f}"
-    )
+    dim_line = (f"📐 Org {d_org:.1f}  ·  Tok {d_tok:.1f}  "
+                f"·  Mat {d_mat:.1f}  ·  Mom {d_mom:.1f}")
 
+    # Header line
+    header_line = f"{name} ({symbol}) · BASE · {_mcap_line(mcap)}"
+
+    # Trade plan
+    plan_line = _trade_plan(mcap, stype)
+
+    # Contract + URL
+    token    = pair.get("baseToken") or {}
+    contract = token.get("address", "?")
+    url      = pair.get("url", "")
+
+    sep = "━" * 35
     return (
-        f"Age:          {age_txt}  web:{web_txt}  socials:{social_txt}\n"
-        f"Txns h24:     {txns_h24:,}  vol:{accel_txt}\n"
-        f"Market cap:   {mcap_txt}\n"
-        f"Liquidity:    ${alert['liquidity']:,.0f}\n"
-        f"Price:        ${pair.get('priceUsd', '?')}\n"
-        f"Price chg:    {chg_txt}\n"
-        f"Buy ratio h1: {buy_txt}\n"
-        f"Quiet period: {quiet_txt}\n"
-        f"Conviction:   {_conviction_bar(alert.get('conviction', 0))}\n"
-        f"{dim_txt}\n"
-        f"Contract:     {contract}\n"
-        f"DEX:          {pair.get('dexId', '?')}\n"
-        f"{pair.get('url', '')}"
+        f"{tier_header}\n"
+        f"{sep}\n"
+        f"{header_line}\n"
+        f"\n"
+        f"WHY: {why_text}\n"
+        f"\n"
+        f"{conv_line}\n"
+        f"{dim_line}\n"
+        f"\n"
+        f"{price_line}\n"
+        f"{liq_line}\n"
+        f"{quality_line}\n"
+        f"\n"
+        f"📋 TRADE PLAN\n"
+        f"   {plan_line}\n"
+        f"\n"
+        f"Contract: {contract}\n"
+        f"{url}"
     )
 
 
 def _format_resurrection(alert):
-    pair = alert["pair"]
-    name, symbol = _token_header(pair)
-    mcap = alert.get("market_cap") or 0
-    mult_header = f"  [{10_000_000/mcap:,.0f}× to $10M]" if mcap > 0 else ""
-    fall_pct    = alert.get("fall_pct", 0)
-    ath         = alert.get("all_time_high", 0)
-    tier = "💎 LARGE-CAP " if alert.get("largecap_mode") else ("💎 MID-CAP " if alert.get("midcap_mode") else "")
-    return (
-        f"💀→🔥 {tier}DEAD-TOKEN RESURRECTION{mult_header}\n"
-        f"{name} ({symbol})\n"
-        f"Previous peak: ${ath:.6g}  →  now ${alert['current_price']:.6g}  "
-        f"(fell {fall_pct:.0f}% from ATH)\n"
-        f"h1 vol: ${alert['h1_vol']:,.0f}   h24 vol: ${alert['h24_vol']:,.0f}\n"
-        + _common_footer(alert)
+    fall_pct = alert.get("fall_pct", 0)
+    ath      = alert.get("all_time_high", 0)
+    h1_vol   = alert.get("h1_vol", 0)
+    h24_vol  = alert.get("h24_vol", 0)
+    cur_px   = alert.get("current_price", 0)
+    tier_pfx = "LARGE-CAP " if alert.get("largecap_mode") else ("MID-CAP " if alert.get("midcap_mode") else "")
+    why = (
+        f"Previously fell {fall_pct:.0f}% from ATH (${ath:.4g}) and went "
+        f"dormant. Now: h1 vol ${h1_vol:,.0f} / h24 ${h24_vol:,.0f}. "
+        f"Dead tokens that revive often run hard — the story is already priced in reverse."
+    )
+    return _build_alert_body(
+        alert,
+        tier_header=f"🔥 RIDE SIGNAL — {tier_pfx}DEAD-TOKEN RESURRECTION",
+        why_text=why,
     )
 
 
 def _format_milestone(alert):
-    pair = alert["pair"]
-    name, symbol = _token_header(pair)
     mcap      = alert.get("market_cap") or 0
     milestone = alert.get("milestone", 0)
     ms_labels = {
-        100_000:   ("$100K",  "Micro to Emerging"),
-        500_000:   ("$500K",  "Gaining Real Traction"),
-        1_000_000: ("$1M",    "Crossed $1M — Real Project"),
-        5_000_000: ("$5M",    "Approaching $10M"),
-        10_000_000:("$10M",   "🚀 $10M Milestone Hit"),
+        100_000:    ("$100K",  "micro-cap to emerging"),
+        500_000:    ("$500K",  "gaining real traction"),
+        1_000_000:  ("$1M",    "crossed $1M — real project"),
+        5_000_000:  ("$5M",    "approaching $10M"),
+        10_000_000: ("$10M",   "hit $10M 🚀"),
     }
-    ms_str, ms_label = ms_labels.get(milestone, (f"${milestone/1e6:.1f}M", "Milestone"))
+    ms_str, ms_label = ms_labels.get(milestone, (f"${milestone/1e6:.1f}M", "milestone"))
     remaining = max(0, 10_000_000 - mcap)
-    tier = "💎 " if alert.get("largecap_mode") or alert.get("midcap_mode") else ""
-    return (
-        f"🏁 {tier}MCAP MILESTONE: {ms_str} — {ms_label}\n"
-        f"{name} ({symbol})\n"
-        f"MCap now: ${mcap:,.0f}  |  ${remaining:,.0f} left to $10M\n"
-        + _common_footer(alert)
+    rem_s = f"${remaining/1_000:.0f}K" if remaining < 1_000_000 else f"${remaining/1_000_000:.1f}M"
+    tier_pfx = "LARGE-CAP " if alert.get("largecap_mode") else ("MID-CAP " if alert.get("midcap_mode") else "")
+    why = (
+        f"Crossed {ms_str} mcap ({ms_label}). "
+        f"{rem_s} remaining to $10M. "
+        f"Factual milestone — useful for tracking the full move from entry."
+    )
+    return _build_alert_body(
+        alert,
+        tier_header=f"📊 INFO — {tier_pfx}MCAP MILESTONE: {ms_str}",
+        why_text=why,
     )
 
 
@@ -2032,138 +2192,138 @@ def format_alert(alert):
 
 
 def _format_giant(alert):
-    pair = alert["pair"]
-    name, symbol = _token_header(pair)
-    mcap = alert.get("market_cap") or 0
-    mult_header = f"  [{10_000_000/mcap:,.0f}× to $10M]" if mcap > 0 else ""
     sleep_days = alert.get("sleep_days", 0)
     wake_mult  = alert.get("wake_mult", 0)
-    tier = "💎 MID-CAP " if alert.get("midcap_mode") else ""
-    return (
-        f"💤→⚡ {tier}SLEEPING GIANT — WAKING AFTER {sleep_days:.0f}d QUIET{mult_header}\n"
-        f"{name} ({symbol})\n"
-        f"Silent for {sleep_days:.0f} days  →  h1 now {wake_mult:.0f}× the quiet hourly rate\n"
-        f"h1 vol: ${alert['h1_vol']:,.0f}   quiet h24 baseline: ${alert['baseline_h24_vol']:,.0f}\n"
-        + _common_footer(alert)
+    h1_vol     = alert.get("h1_vol", 0)
+    baseline   = alert.get("baseline_h24_vol", 0)
+    tier_pfx   = "MID-CAP " if alert.get("midcap_mode") else ""
+    why = (
+        f"Silent for {sleep_days:.0f} days, then h1 volume hit {wake_mult:.0f}× "
+        f"its quiet hourly rate (${h1_vol:,.0f} vs ${baseline/24:,.0f}/hr baseline). "
+        f"This fires in the first candle of real activity — before price moves. "
+        f"Rarest and earliest entry signal."
+    )
+    return _build_alert_body(
+        alert,
+        tier_header=f"⚡ ENTRY SIGNAL — {tier_pfx}SLEEPING GIANT WAKEUP ({sleep_days:.0f}d dormant)",
+        why_text=why,
     )
 
 
 def _format_slow_build(alert):
-    pair = alert["pair"]
-    name, symbol = _token_header(pair)
-    mcap = alert.get("market_cap") or 0
-    mult_header = f"  [{10_000_000/mcap:,.0f}× to $10M]" if mcap > 0 else ""
-    txns_growth  = alert.get("txns_growth", 0)
-    txns_now     = alert.get("txns_now", 0)
-    txns_then    = alert.get("txns_week_ago", 0)
-    px_chg_7d    = alert.get("price_chg_7d", 0)
-    liq_chg_7d   = alert.get("liq_chg_7d", 0)
-    days         = alert.get("days_of_data", 0)
-    px_sign      = "+" if px_chg_7d >= 0 else ""
-    liq_sign     = "+" if liq_chg_7d >= 0 else ""
-    return (
-        f"🌱 SLOW BUILD ACCUMULATION — EARLY STAGE SETUP{mult_header}\n"
-        f"{name} ({symbol})\n"
-        f"Txn growth over 7d: {txns_then} → {txns_now} ({txns_growth*100:.0f}% up)\n"
-        f"Price 7d: {px_sign}{px_chg_7d:.1f}%   Liquidity 7d: {liq_sign}{liq_chg_7d:.1f}%\n"
-        f"Data window: {days} days  —  still below radar, building quietly\n"
-        + _common_footer(alert)
+    txns_growth = alert.get("txns_growth", 0)
+    txns_now    = alert.get("txns_now", 0)
+    txns_then   = alert.get("txns_week_ago", 0)
+    px_chg_7d   = alert.get("price_chg_7d", 0)
+    liq_chg_7d  = alert.get("liq_chg_7d", 0)
+    days        = alert.get("days_of_data", 0)
+    why = (
+        f"Daily transactions grew {txns_growth*100:.0f}% in 7 days "
+        f"({txns_then} → {txns_now}/d) while volume stayed quiet. "
+        f"Price {px_chg_7d:+.1f}%, liquidity {liq_chg_7d:+.1f}% — no hype yet. "
+        f"Patient accumulation over {days} days. This is what early Virtuals/GitClaw looked like."
+    )
+    return _build_alert_body(
+        alert,
+        tier_header="🌱 WATCH SIGNAL — SLOW BUILD ACCUMULATION",
+        why_text=why,
     )
 
 
 def _format_coil(alert):
-    pair = alert["pair"]
-    name, symbol = _token_header(pair)
-    mcap = alert.get("market_cap") or 0
-    mult_header = f"  [{10_000_000/mcap:,.0f}× to $10M]" if mcap > 0 else ""
-    pct_away = alert.get("pct_to_breakout", 0)
-    if alert.get("midcap_mode"):
-        header = f"💎 MID-CAP COIL — APPROACHING RESISTANCE{mult_header}"
-    else:
-        header = f"🔍 PRE-BREAKOUT COIL — APPROACHING RESISTANCE{mult_header}"
-    return (
-        f"{header}\n"
-        f"{name} ({symbol})\n"
-        f"Ceiling: ${alert['ath_reference']:.8g}  ←  "
-        f"Price now: ${alert['current_price']:.8g}  ({pct_away:.1f}% to breakout)\n"
-        f"h24 vol: ${alert['h24_vol']:,.0f}   h1 vol: ${alert['h1_vol']:,.0f}\n"
-        + _common_footer(alert)
+    pct_away  = alert.get("pct_to_breakout", 0)
+    ath_ref   = alert.get("ath_reference", 0)
+    h1_vol    = alert.get("h1_vol", 0)
+    tier_pfx  = "MID-CAP " if alert.get("midcap_mode") else ""
+    why = (
+        f"Price is {pct_away:.1f}% below its resistance ceiling (${ath_ref:.6g}), "
+        f"with h1 vol ${h1_vol:,.0f} building and dominant buy pressure. "
+        f"The coil is tightening — breakout signal fires when it clears. "
+        f"Early entry vs waiting for the breakout."
+    )
+    return _build_alert_body(
+        alert,
+        tier_header=f"🌱 WATCH SIGNAL — {tier_pfx}PRE-BREAKOUT COIL",
+        why_text=why,
     )
 
 
 def _format_spike(alert):
-    pair = alert["pair"]
-    tf   = alert["timeframe"]
-    name, symbol = _token_header(pair)
-    baseline = alert["baseline_h24_vol"]
-    spike    = alert["spike_volume"]
-    multiple = spike / baseline if baseline > 0 else None
-    mult_txt = "from near-zero" if multiple is None else f"{multiple:,.0f}x"
+    tf       = alert.get("timeframe", "h1")
+    baseline = alert.get("baseline_h24_vol", 0)
+    spike    = alert.get("spike_volume", 0)
+    multiple = spike / baseline if baseline > 0 else 0
+    mult_txt = f"{multiple:,.0f}×" if multiple > 0 else "from near-zero"
     resistance = alert.get("quiet_price_high")
-    res_txt    = f"${resistance:.8g}" if resistance else "n/a"
-    tier = "💎 MID-CAP " if alert.get("midcap_mode") else ""
-    return (
-        f"=== {tier}VOLUME SPIKE ({tf.upper()}) ===\n"
-        f"{name} ({symbol})\n"
-        f"Baseline h24: ${baseline:,.0f}  →  {tf} now: ${spike:,.0f}  ({mult_txt})\n"
-        f"ATH reference: {res_txt}  (watch this level)\n"
-        + _common_footer(alert)
+    tier_pfx   = "MID-CAP " if alert.get("midcap_mode") else ""
+    res_note   = f" Ceiling at ${resistance:.6g} — watch for breakout." if resistance else ""
+    why = (
+        f"{tf.upper()} volume hit ${spike:,.0f} ({mult_txt} the quiet baseline of ${baseline:,.0f}/d). "
+        f"Absolute spike — something just changed.{res_note}"
+    )
+    return _build_alert_body(
+        alert,
+        tier_header=f"⚡ ENTRY SIGNAL — {tier_pfx}VOLUME SPIKE ({tf.upper()})",
+        why_text=why,
     )
 
 
 def _format_surge(alert):
-    pair   = alert["pair"]
-    name, symbol = _token_header(pair)
-    window = alert.get("surge_window", "h1").upper()
-    rate_label = "5-min avg" if alert.get("surge_window") == "m5" else "hourly avg"
-    resistance = alert.get("quiet_price_high")
-    res_txt    = f"${resistance:.8g}" if resistance else "n/a"
-    tier = "💎 MID-CAP " if alert.get("midcap_mode") else ""
-    return (
-        f"=== {tier}EARLY WAKEUP ({window}  {alert['surge_ratio']:.0f}x SURGE) ===\n"
-        f"{name} ({symbol})\n"
-        f"Baseline ({rate_label}): ${alert['avg_baseline_rate']:,.0f}  "
-        f"(h24 = ${alert['baseline_h24_vol']:,.0f})\n"
-        f"{window} vol now:  ${alert['surge_vol']:,.0f}  ({alert['surge_ratio']:.0f}× the rate)\n"
-        f"ATH reference: {res_txt}  (watch this level)\n"
-        + _common_footer(alert)
+    window        = alert.get("surge_window", "h1").upper()
+    surge_vol     = alert.get("surge_vol", 0)
+    surge_ratio   = alert.get("surge_ratio", 0)
+    baseline_rate = alert.get("avg_baseline_rate", 0)
+    baseline_h24  = alert.get("baseline_h24_vol", 0)
+    resistance    = alert.get("quiet_price_high")
+    tier_pfx      = "MID-CAP " if alert.get("midcap_mode") else ""
+    res_note      = f" Resistance ceiling ${resistance:.6g} — breakout signal fires next." if resistance else ""
+    why = (
+        f"{window} volume just hit ${surge_vol:,.0f} — that is {surge_ratio:.0f}× "
+        f"the quiet hourly rate (${baseline_rate:,.0f}/hr, h24 baseline ${baseline_h24:,.0f}). "
+        f"Early wakeup fires in the first hour.{res_note}"
+    )
+    return _build_alert_body(
+        alert,
+        tier_header=f"⚡ ENTRY SIGNAL — {tier_pfx}EARLY WAKEUP ({window} {surge_ratio:.0f}× SURGE)",
+        why_text=why,
     )
 
 
 def _format_breakout(alert):
-    pair = alert["pair"]
-    name, symbol = _token_header(pair)
-    source = alert.get("ath_source", "")
-    source_txt = f"  [{source}]" if source else ""
-    mcap = alert.get("market_cap") or 0
-    mult_header = f"  [{10_000_000/mcap:,.0f}× to $10M]" if mcap > 0 else ""
-    if alert.get("midcap_mode"):
-        header = f"💎 MID-CAP BREAKOUT — NEXT LEG UP{source_txt}{mult_header}"
-    else:
-        header = f"🚀 BREAKOUT — ENTRY SIGNAL{source_txt}{mult_header}"
-    return (
-        f"{header}\n"
-        f"{name} ({symbol})\n"
-        f"Resistance: ${alert['quiet_price_high']:.8g}  →  "
-        f"Now: ${alert['current_price']:.8g}  (+{alert['breakout_pct']:.1f}% above ceiling)\n"
-        f"h24 vol: ${alert['h24_vol']:,.0f}   h1 vol: ${alert['h1_vol']:,.0f}\n"
-        + _common_footer(alert)
+    breakout_pct = alert.get("breakout_pct", 0)
+    ceiling      = alert.get("quiet_price_high", 0)
+    h1_vol       = alert.get("h1_vol", 0)
+    source       = alert.get("ath_source", "")
+    src_note     = f" ({source})" if source else ""
+    tier_pfx     = "MID-CAP " if alert.get("midcap_mode") else ""
+    why = (
+        f"Price cleared resistance{src_note} at ${ceiling:.6g} by +{breakout_pct:.1f}%, "
+        f"with h1 vol ${h1_vol:,.0f} confirming the move. "
+        f"Breakout above consolidation ceiling with volume = primary entry signal. "
+        f"This is the setup all earlier signals were leading to."
+    )
+    return _build_alert_body(
+        alert,
+        tier_header=f"⚡ ENTRY SIGNAL — {tier_pfx}ATH BREAKOUT (+{breakout_pct:.0f}% above ceiling)",
+        why_text=why,
     )
 
 
 def _format_continuation(alert):
-    pair = alert["pair"]
-    name, symbol = _token_header(pair)
-    mcap = alert.get("market_cap") or 0
-    mult_header = f"  [${mcap/1_000_000:.1f}M mcap now]" if mcap >= 1_000_000 else (
-                  f"  [${mcap/1_000:.0f}K mcap now]" if mcap > 0 else "")
-    return (
-        f"🔥 STILL RUNNING — ADD OR HOLD{mult_header}\n"
-        f"{name} ({symbol})\n"
-        f"Last level: ${alert['prev_reference']:.8g}  →  "
-        f"Now: ${alert['current_price']:.8g}  (+{alert['continuation_pct']:.0f}% since last alert)\n"
-        f"h24 vol: ${alert['h24_vol']:,.0f}   h1 vol: ${alert['h1_vol']:,.0f}\n"
-        + _common_footer(alert)
+    cont_pct  = alert.get("continuation_pct", 0)
+    prev_ref  = alert.get("prev_reference", 0)
+    cur_px    = alert.get("current_price", 0)
+    h1_vol    = alert.get("h1_vol", 0)
+    why = (
+        f"Price climbed {cont_pct:.0f}% above the last alert level (${prev_ref:.6g} → "
+        f"${cur_px:.6g}), h1 vol ${h1_vol:,.0f} still strong. "
+        f"Momentum is intact — the move is not done. Add to winners or hold. "
+        f"Trail stop below last support."
+    )
+    return _build_alert_body(
+        alert,
+        tier_header=f"🔥 RIDE SIGNAL — STILL RUNNING (+{cont_pct:.0f}% since last alert)",
+        why_text=why,
     )
 
 
@@ -2364,6 +2524,7 @@ def run_cycle(dex, cfg, notifier, state, now, force_discovery=False):
                     min_conv = tg_min.get(atype, tg_min.get("default", 0))
                 if conviction >= min_conv and tg_sent < cfg.get("max_alerts_per_cycle", 50):
                     notifier.send(message)
+                    _log_signal(alert, cfg_chain=cfg.get("chain", "base"))
                     tg_sent += 1
                 alerts_logged += 1
 
@@ -2423,6 +2584,19 @@ def run_cycle(dex, cfg, notifier, state, now, force_discovery=False):
             _cg_min_conv = cfg.get("telegram_min_conviction", {}).get("vc_backed_project", 5)
             if _cg_conv >= _cg_min_conv and tg_sent < cfg.get("max_alerts_per_cycle", 50):
                 notifier.send(_cg_msg)
+                # Log VC alert for RL tracker (minimal synthetic alert dict)
+                _log_signal({
+                    "type":        "vc_backed_project",
+                    "conviction":  _cg_conv,
+                    "market_cap":  _cg_mcap,
+                    "pair":        {"baseToken": {"address": _cg_addr, "name": _cg_name, "symbol": _cg_symbol},
+                                    "url": _cg_snap.get("pair_url", "")},
+                    "liquidity":   _cg_snap.get("liq", 0),
+                    "pair_age_days": None,
+                    "h1_vol":      0,
+                    "h24_vol":     0,
+                    "conv_dims":   {},
+                }, cfg_chain=cfg.get("chain", "base"))
                 tg_sent += 1
 
     # ── Hourly watchlist pulse ───────────────────────────────────────────────
