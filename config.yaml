@@ -1,41 +1,217 @@
-# Base-chain volume-spike alert bot configuration.
-# All volume / liquidity values are in USD and use DexScreener's 1-hour window.
+# Base-chain ATH breakout alert bot configuration.
+# All volume / liquidity values are in USD.
 
 chain: base
 state_file: state.json
+screener_addresses_file: discovered_addresses.json   # shared feed from screener.py
+gecko_highs_file: gecko_highs.json                   # 30-day price highs from bootstrap_highs.py
 
-# How often to re-check monitored tokens and to discover new ones.
 poll_interval_seconds: 120
 discovery_interval_seconds: 300
 
-# Discovery / polling limits.
-max_monitored_tokens: 5000
-request_batch_size: 30      # DexScreener tokens endpoint accepts up to 30 addresses
-batch_pause_seconds: 0.5    # small pause between batches to respect rate limits
-pair_state_ttl_seconds: 604800   # forget pairs not seen for 7 days
+# Telegram quality gate — minimum conviction score to send each alert type.
+# Telegram quality gate.
+# With the new scoring (website no longer double-counted, mcap bonus halved,
+# community/engagement thresholds raised), a bare-minimum-passing token scores
+# ~4-5. Only legitimately strong setups reach 7.
+telegram_min_conviction:
+  # ── Sub-$100K micro-cap tier ──
+  # Lowered from 7 → 5-6: geometric mean of 4 dimensions scoring simultaneously ≥7
+  # was almost never hit by early-stage tokens that are genuinely worth watching.
+  # Real early signals look rough — we want them BEFORE the crowd, not after.
+  resistance_breakout: 5        # clear breakout above resistance is the main entry
+  pre_breakout_coil: 5          # approaching ceiling with volume = early entry
+  volume_surge: 5               # sudden volume spike from silence = watch this
+  volume_spike: 5               # absolute volume threshold crossed
+  sleeping_giant_wakeup: 4      # 30d+ dormant token waking = very early signal
+  momentum_continuation: 5      # confirmed running — ride it
+  default: 5
+  # ── $100K–$1M mid-cap tier — passes stricter quality filter ──
+  midcap_resistance_breakout: 6
+  midcap_pre_breakout_coil: 6
+  midcap_volume_surge: 6
+  midcap_volume_spike: 6
+  midcap_sleeping_giant_wakeup: 5
+  midcap_momentum_continuation: 5
+  midcap_default: 6
+  slow_build_accumulation: 4    # early-stage patient accumulation — catch before liftoff
+  dead_token_resurrection: 5    # reviving tokens — unusual pattern worth flagging
+  mcap_milestone: 4             # factual milestone — always informative, low bar
+  vc_backed_project: 4          # ivy league / VC backed — fire even with moderate conviction
 
-# Extra search terms used to seed token discovery on Base.
+# Hard cap on Telegram messages sent in a single cycle (prevents rate-limit bans).
+max_alerts_per_cycle: 20
+
+# How often (seconds) to send the hourly watchlist digest.
+# Set to 0 to disable.  Default 3600 = once per hour.
+watchlist_pulse_interval_seconds: 3600
+
+max_monitored_tokens: 10000  # expanded: micro ($5K–$100K) + mid-cap ($100K–$1M) + large-cap ($1M–$10M)
+request_batch_size: 30      # DexScreener tokens endpoint: max 30 per call
+batch_pause_seconds: 0.5    # pause between batches to respect rate limits
+pair_state_ttl_seconds: 604800   # forget tokens unseen for 7 days
+
+micro_watchlist_file: micro_watchlist.json  # watchlist from micro_scanner.py feeds bot discovery
+
 discovery_search_terms:
   - base
+  - ai
+  - agent
+  - based
+  - defi
+  - protocol
+  - yield
+  - launch
   - WETH
-  - USDC
-  - USDbC
 
-# Timeframes checked for the spike. DexScreener provides: m5, h1, h6, h24.
-# (h4 / h8 / h12 are not available from the API.)
+# Timeframes checked for absolute volume spike.
+# DexScreener provides: m5, h1, h6, h24  (h4/h8/h12 not available).
 timeframes: [h1, h6, h24]
 
-# Spike detection rules.
+# ── Sub-$100K quality gate ───────────────────────────────────────────────────
+# Applied BEFORE any signal fires. Tokens failing these NEVER alert.
+# All 10 checks are enforced in code regardless of which keys are set here.
 #
-# A token qualifies if:
-#   1. Its 1d (h24) volume has been under low_volume_max recently
-#      (i.e. it has been "sleeping" — baseline_lookback_seconds controls how
-#      recently we must have observed that quiet state).
-#   2. Any of the spike timeframes above now shows >= spike_volume_min.
+# The meme-detection strategy goes well beyond token names:
+#   • Twitter AND Telegram both required — behavioral signal: real teams run
+#     both channels; anon pump groups typically only set up one.
+#   • Supply fingerprinting — 420B/69T/1T+ supplies are chosen for psychological
+#     effect by meme deployers, not for utility.  Catches renamed memes on day 1.
+quality_filter:
+  min_pair_age_days: 7          # ≥7 days — past the initial 48-72h rug window
+  min_h24_txns: 40              # ≥40 organic txns — real activity, not bots
+  max_fdv_mcap_ratio: 5.0       # FDV ≤ 5× MCap — limited unlock dump risk
+  filter_meme_names: true       # triggers both name-based AND supply-based meme checks
+  min_liq_mcap_pct: 10          # ≥10% liq/mcap — pool has real depth
+  require_telegram: false       # Twitter required; Telegram is optional (boosts maturity score)
+  # website + Twitter required (hardcoded in _quality_filter); Telegram optional
+  # supply fingerprint check enabled when filter_meme_names: true
+
+# ── Mid-cap quality gate ($100K–$1M) ────────────────────────────────────────
+# Much stricter than micro-cap. These are established projects — we demand
+# evidence of a real team: website + social both required, clean tokenomics,
+# older pair age, active community.
+quality_filter_midcap:
+  min_pair_age_days: 14          # survived 14 days — past rug window
+  min_h24_txns: 100              # active community — real organic trading
+  max_fdv_mcap_ratio: 3.0        # strict tokenomics — no hidden supply dump risk
+  min_liq_mcap_pct: 15           # at least 15% pool backing — real market depth
+  filter_meme_names: true        # block doge/pepe/litecoin clones and pump vocabulary
+  require_telegram: false        # Twitter required; Telegram optional (boosts maturity score)
+  # website + Twitter required (hardcoded in _quality_filter_midcap); Telegram optional
+
+# ── Large-cap quality gate ($1M–$10M) ───────────────────────────────────────
+# The most stringent tier — these are established projects approaching $10M mcap.
+# Require full social presence, deep liquidity, clean tokenomics, 2+ months age.
+quality_filter_largecap:
+  min_pair_age_days: 60           # 2 months of survival — past all rug windows
+  min_h24_txns: 400               # deep community activity
+  max_fdv_mcap_ratio: 2.0         # extremely clean tokenomics — no hidden supply bombs
+  min_liq_mcap_pct: 10            # ≥10% pool backing
+  filter_meme_names: true         # zero meme tolerance at this tier
+  # website + Twitter + Telegram ALL required (hardcoded in _quality_filter_largecap)
+
 detection:
-  low_volume_max: 9999            # 1d volume must have been under this (3-4 figs, < $10k)
-  spike_volume_min: 10000         # any timeframe hitting this triggers an alert (5-6 figs)
-  max_market_cap_usd: 500000      # skip tokens with market cap above $500k
-  min_liquidity_usd: 20000        # ignore illiquid pools
-  baseline_lookback_seconds: 172800   # must have seen quiet 1d volume within last 48h
-  alert_cooldown_seconds: 86400   # don't re-alert same pair within 24h
+  # ── Quiet / sleeping threshold ──────────────────────────────────────────
+  # Token is "sleeping" when h24 vol stays below this level.
+  # Used as the baseline for surge-ratio detection.
+  low_volume_max: 50000           # $50k h24 = dead token
+
+  # ── Consolidation tracking ───────────────────────────────────────────────
+  # Tracks the highest price seen while h24 vol is below this level.
+  # Broader than low_volume_max — catches tokens with moderate activity too.
+  # This becomes the ATH reference for the breakout signal.
+  consolidation_volume_max: 500000  # $500k h24 = consolidating (not yet surging)
+
+  # ── Absolute spike threshold ─────────────────────────────────────────────
+  spike_volume_min: 5000          # any timeframe must hit $5k to trigger absolute spike
+
+  # ── Market / liquidity filters ───────────────────────────────────────────
+  min_market_cap_usd: 5000        # skip dust/zero-mcap tokens
+  max_market_cap_usd: 100000      # sub-$100K primary tier; mid-cap handled separately
+  max_midcap_usd: 1000000         # mid-cap tier ceiling — $100K–$1M
+  max_largecap_usd: 10000000      # large-cap tier ceiling — $1M–$10M (new)
+  midcap_vol_multiplier: 4        # scale all volume thresholds 4× for mid-cap tier
+  largecap_vol_multiplier: 10     # scale 10× for $1M–$10M tokens (high natural volume)
+  min_liquidity_usd: 5000         # need enough pool depth to actually enter
+
+  # ── Baseline validity ────────────────────────────────────────────────────
+  baseline_lookback_seconds: 172800   # must have seen quiet vol within last 48h
+
+  # ── Cooldowns ────────────────────────────────────────────────────────────
+  alert_cooldown_seconds: 86400   # 24h cooldown for volume-spike / surge alerts
+
+  # ── Early wakeup surge detection ─────────────────────────────────────────
+  # Fires when volume rate is spike_volume_multiplier× higher than the quiet average.
+  # Example: sleeping at h24=$5k (avg $208/hr) → h1=$3k (14×) FIRES IN FIRST HOUR.
+  spike_volume_multiplier: 8
+  min_surge_m5_vol: 500           # m5 must be at least $500 to qualify
+  min_surge_h1_vol: 2000          # h1 must be at least $2k to qualify
+
+  # ── Buy pressure gate ────────────────────────────────────────────────────
+  # Suppresses pure sell-offs and dumps.
+  min_buy_ratio: 0.35             # at least 35% of h1 txns must be buys
+  min_txns_h1: 5                  # skip gate if fewer than 5 h1 txns (thin data)
+
+  # ── Price direction filter (surge alerts only) ───────────────────────────
+  min_price_change_m5: -10        # skip surge if m5 candle < -10%
+
+  # ── Pre-breakout coiling ─────────────────────────────────────────────────
+  # Fires when price is within coiling_lower_pct% below the ATH reference
+  # while volume is building and buy pressure is dominant.  Gives an earlier
+  # entry than the breakout signal — catch the coil before the spring fires.
+  coiling_lower_pct: 15              # zone starts 15% below ceiling
+  coiling_min_h1_vol: 1000           # h1 vol must be at least $1k
+  coiling_buy_ratio_min: 0.50        # at least 50% of h1 txns must be buys
+  coiling_cooldown_seconds: 43200    # re-alert same token at most every 12h
+
+  # ── ATH breakout — the primary "final takeoff" signal ────────────────────
+  # Uses the best available price ceiling:
+  #   1. gecko_30d_high    — 30-day high from GeckoTerminal (run bootstrap_highs.py)
+  #   2. consolidation_high — highest price while h24 vol < consolidation_volume_max
+  #   3. quiet_price_high  — highest price while h24 vol < low_volume_max
+  # Fires when current price exceeds that ceiling by resistance_breakout_pct.
+  # Does NOT require a prior volume spike alert — catches consolidating tokens too.
+  resistance_breakout_pct: 5       # price must exceed ATH reference by 5%
+  breakout_cooldown_seconds: 21600 # re-alert same token at most every 6h
+  breakout_min_h1_vol: 500         # h1 vol must be at least $500 for breakout to fire
+  min_consolidation_age_seconds: 3600   # 1h watch window before firing breakout (was 4h)
+
+  # ── Momentum continuation ────────────────────────────────────────────────
+  # Fires when price climbs continuation_pct% above the last breakout/continuation level.
+  # Tracks the entire move: breakout → +50% → +50% again → ...
+  continuation_pct: 50             # fires each time price advances 50% above last alert
+  continuation_cooldown_seconds: 14400  # min 4h between continuation alerts
+
+  # ── Sleeping Giant wakeup ────────────────────────────────────────────────
+  # Fires when a token has been truly dormant for sleeping_giant_days and
+  # suddenly shows h1 vol ≥ sleeping_giant_surge_mult × the quiet hourly rate.
+  # Earlier signal than any surge/spike — the very first candle of life.
+  sleeping_giant_days: 30                   # token must have been quiet this long
+  sleeping_giant_cooldown_seconds: 172800   # 48h between wakeup alerts
+  sleeping_giant_surge_mult: 5              # h1 must be 5× the quiet hourly average
+
+  # ── Dead-Token Resurrection ───────────────────────────────────────────────────
+  # Fires when a token the bot has seen at a much higher price (ATH ≥5× current)
+  # was then dormant and is now surging again.  Catches "fallen soldiers" reviving.
+  resurrection_cooldown_seconds: 604800     # re-alert at most once per 7 days
+  resurrection_min_fall_mult: 5.0           # historical peak must be ≥5× current price
+  resurrection_surge_mult: 4               # h24 vol must be ≥4× dormant baseline
+
+  # ── MCap Milestone Tracker ────────────────────────────────────────────────────
+  # Fires ONCE when a quality-passing token crosses $100K, $500K, $1M, $5M, $10M.
+  # Works across all tiers — tracks the full journey from micro to large-cap.
+  milestone_min_conviction: 5.0            # minimum conviction to fire milestone alert
+
+  # ── CoinGecko / VC Enrichment ─────────────────────────────────────────────────
+  # One-time CoinGecko lookup per token (cached 7 days).  Fires IVY LEAGUE alert
+  # when a CoinGecko-listed project has VC portfolio category tags or description
+  # keywords matching known VCs (Coinbase Ventures, a16z, Paradigm, etc.).
+  cg_checks_per_cycle: 3                   # max CoinGecko API calls per cycle
+
+  # ── Slow Build Accumulation ──────────────────────────────────────────────────
+  # Fires when daily txn count has grown ≥30% week-over-week while volume stays
+  # quiet.  Catches Virtuals/GitClaw/Aeon-style early accumulation before any
+  # volume spike or breakout fires.  Requires ≥7 days of daily snapshots.
+  slow_build_cooldown_seconds: 604800       # re-alert at most once per 7 days
+  slow_build_min_conviction: 6.0           # must score ≥6.0 to fire
