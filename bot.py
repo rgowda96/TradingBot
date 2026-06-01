@@ -44,6 +44,33 @@ log = logging.getLogger("bot")
 
 SIGNAL_LOG_FILE = "signal_log.jsonl"
 
+# ---------------------------------------------------------------------------
+# RL model — loaded once at startup, used to augment conviction scores
+# ---------------------------------------------------------------------------
+try:
+    from signal_rl import load_model as _rl_load_model, rl_score as _rl_score
+    _RL_MODEL = _rl_load_model()
+    log.info("RL model loaded: %d total observations", _RL_MODEL.n_total)
+except Exception as _rl_exc:
+    _RL_MODEL = None
+    log.info("RL model not available (%s) — running without RL bonus", _rl_exc)
+
+
+def _rl_bonus(alert):
+    """Return LinUCB conviction bonus ∈ [-1.5, +1.5].
+
+    Returns 0.0 if the model isn't trained yet or failed to load.
+    The bonus is added to base conviction before the Telegram gate check,
+    so signals in feature regions the model has learned to trust get
+    a higher effective conviction, and regions with poor outcomes get lower.
+    """
+    if _RL_MODEL is None:
+        return 0.0
+    try:
+        return _rl_score(_RL_MODEL, alert.get("type", ""), alert)
+    except Exception:
+        return 0.0
+
 
 # ---------------------------------------------------------------------------
 # Signal logging — RL feedback loop
@@ -2514,7 +2541,16 @@ def run_cycle(dex, cfg, notifier, state, now, force_discovery=False):
                     "mcap_milestone":         "MCAP MILESTONE",
                 }.get(atype, ("LARGE-CAP SPIKE" if alert.get("largecap_mode")
                               else ("MID-CAP SPIKE" if is_midcap else "VOLUME SPIKE")))
-                log.info("%s [conviction=%.1f]:\n%s", label, conviction, message)
+                # RL bonus: LinUCB adds/subtracts up to ±1.5 from conviction
+                # based on what it has learned about this feature region.
+                # Untrained arms return 0.0 (no influence until 3+ observations).
+                bonus    = _rl_bonus(alert)
+                eff_conv = conviction + bonus   # effective conviction for gate check
+
+                log.info(
+                    "%s [conv=%.1f rl%+.2f → eff=%.1f]:\n%s",
+                    label, conviction, bonus, eff_conv, message,
+                )
                 # Telegram quality gate: mid-cap signals require higher conviction
                 # since they're less "entry-level early" and need stronger signal quality.
                 tg_min = cfg.get("telegram_min_conviction", {})
@@ -2522,7 +2558,7 @@ def run_cycle(dex, cfg, notifier, state, now, force_discovery=False):
                     min_conv = tg_min.get(f"midcap_{atype}", tg_min.get("midcap_default", 6))
                 else:
                     min_conv = tg_min.get(atype, tg_min.get("default", 0))
-                if conviction >= min_conv and tg_sent < cfg.get("max_alerts_per_cycle", 50):
+                if eff_conv >= min_conv and tg_sent < cfg.get("max_alerts_per_cycle", 50):
                     notifier.send(message)
                     _log_signal(alert, cfg_chain=cfg.get("chain", "base"))
                     tg_sent += 1
