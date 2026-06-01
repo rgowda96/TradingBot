@@ -2372,6 +2372,171 @@ def prune_token_state(state, ttl, now):
         del state["tokens"][addr]
 
 
+def _send_daily_digest(notifier, state, now):
+    """Send one Telegram message per day summarising everything the system did.
+
+    Covers:
+      • Signals sent in last 24 h (from signal_log.jsonl)
+      • RL model health: active arms, total observations, per-arm win rate
+      • Backtest DB coverage (backtest_db.json) if available
+      • Top 5 watchlist tokens by conviction
+      • Links to where to see more detail
+
+    Designed to replace manual log-checking. Fires once per day regardless
+    of whether the bot sent any alerts.
+    """
+    date_str = datetime.fromtimestamp(now, tz=timezone.utc).strftime("%a %d %b %Y")
+
+    # ── 1. Signals in last 24 h ──────────────────────────────────────────────
+    sig_counts = {}
+    total_sigs_24h = 0
+    if os.path.exists(SIGNAL_LOG_FILE):
+        cutoff = now - 86400
+        with open(SIGNAL_LOG_FILE) as fh:
+            for line in fh:
+                try:
+                    rec = json.loads(line)
+                    if rec.get("ts", 0) >= cutoff:
+                        st = rec.get("signal_type", "?")
+                        sig_counts[st] = sig_counts.get(st, 0) + 1
+                        total_sigs_24h += 1
+                except Exception:
+                    pass
+    all_time_sigs = 0
+    if os.path.exists(SIGNAL_LOG_FILE):
+        with open(SIGNAL_LOG_FILE) as fh:
+            all_time_sigs = sum(1 for _ in fh)
+
+    sig_tier = {
+        "slow_build_accumulation":  "🌱",
+        "pre_breakout_coil":        "🌱",
+        "sleeping_giant_wakeup":    "⚡",
+        "volume_surge":             "⚡",
+        "volume_spike":             "⚡",
+        "resistance_breakout":      "⚡",
+        "momentum_continuation":    "🔥",
+        "dead_token_resurrection":  "🔥",
+        "mcap_milestone":           "📊",
+        "vc_backed_project":        "📊",
+    }
+    if sig_counts:
+        sig_lines = "\n".join(
+            f"  {sig_tier.get(st,'  ')} {st.replace('_',' ')}: {n}"
+            for st, n in sorted(sig_counts.items(), key=lambda x: -x[1])
+        )
+    else:
+        sig_lines = "  (none — quiet market or bot just started)"
+
+    # ── 2. RL model status ───────────────────────────────────────────────────
+    rl_lines = "  No model yet (need 7+ days of signals)"
+    rl_outcomes = 0
+    if os.path.exists("outcome_log.jsonl"):
+        with open("outcome_log.jsonl") as fh:
+            rl_outcomes = sum(1 for _ in fh)
+    if os.path.exists("rl_model.json"):
+        try:
+            with open("rl_model.json") as fh:
+                rl_data = json.load(fh)
+            arms = rl_data.get("arms", {})
+            active = [(st, a["n_obs"]) for st, a in arms.items() if a.get("n_obs", 0) >= 3]
+            n_total = rl_data.get("n_total", 0)
+            trained_ts = rl_data.get("trained")
+            trained_ago = ""
+            if trained_ts:
+                mins = (now - trained_ts) / 60
+                trained_ago = (f"{mins:.0f}m ago" if mins < 120
+                               else f"{mins/60:.1f}h ago")
+            if active:
+                arm_txt = ", ".join(
+                    f"{st.replace('_',' ')} (n={n})" for st, n in active[:3]
+                )
+                rl_lines = (
+                    f"  Observations: {n_total} | Outcomes: {rl_outcomes}\n"
+                    f"  Active arms ({len(active)}): {arm_txt}\n"
+                    f"  Last trained: {trained_ago}"
+                )
+            else:
+                rl_lines = (
+                    f"  Outcomes: {rl_outcomes} | Observations: {n_total}\n"
+                    f"  No active arms yet (need 3+ outcomes per signal type)"
+                )
+        except Exception:
+            rl_lines = f"  {rl_outcomes} outcomes logged, model not yet readable"
+
+    # ── 3. Backtest DB coverage ──────────────────────────────────────────────
+    bt_lines = "  No backtest DB yet (remote agent hasn't run)"
+    if os.path.exists("backtest_db.json"):
+        try:
+            with open("backtest_db.json") as fh:
+                bt_data = json.load(fh)
+            pools = bt_data.get("pools", {})
+            analysed = sum(1 for v in pools.values()
+                          if isinstance(v, dict) and not v.get("skipped"))
+            winners  = sum(1 for v in pools.values()
+                          if isinstance(v, dict)
+                          and v.get("outcome") in ("10x_plus","5x","2x","winner"))
+            wr = winners / analysed * 100 if analysed else 0
+            bt_lines = (
+                f"  Pools analysed: {analysed:,} | Winners found: {winners:,} ({wr:.0f}%)\n"
+                f"  Total DB entries: {len(pools):,}"
+            )
+        except Exception:
+            bt_lines = "  DB exists but unreadable"
+
+    # ── 4. Top watchlist tokens ──────────────────────────────────────────────
+    tokens = state.get("tokens", {})
+    candidates = []
+    for addr, ts in tokens.items():
+        snap = ts.get("_pulse_snapshot")
+        if not snap:
+            continue
+        if now - snap.get("ts", 0) > 7200:   # fresh data only
+            continue
+        conv = snap.get("conviction", 0)
+        if conv >= 5.0:
+            candidates.append(snap)
+    candidates.sort(key=lambda s: s.get("conviction", 0), reverse=True)
+
+    if candidates:
+        watch_lines = "\n".join(
+            f"  {i+1}. {c.get('name','?')} ({c.get('symbol','?')})  "
+            f"conv {c.get('conviction',0):.1f}  "
+            f"${c.get('mcap',0)/1000:.0f}K"
+            for i, c in enumerate(candidates[:5])
+        )
+    else:
+        watch_lines = "  (no high-conviction tokens in current scan)"
+
+    # ── 5. Assemble and send ─────────────────────────────────────────────────
+    sep = "━" * 32
+    message = (
+        f"📡 DAILY SYSTEM DIGEST — {date_str}\n"
+        f"{sep}\n"
+        f"\n"
+        f"📨 Signals sent last 24h: {total_sigs_24h}  (all-time: {all_time_sigs})\n"
+        f"{sig_lines}\n"
+        f"\n"
+        f"🤖 RL Model (LinUCB)\n"
+        f"{rl_lines}\n"
+        f"\n"
+        f"📊 Universal Backtest DB\n"
+        f"{bt_lines}\n"
+        f"\n"
+        f"👀 Top Watchlist Now\n"
+        f"{watch_lines}\n"
+        f"\n"
+        f"🔗 View logs\n"
+        f"  Remote agents: claude.ai/code/routines\n"
+        f"  Daily commits: github.com/rgowda96/TradingBot/commits\n"
+        f"  Local: tail -f bot.log | train_loop.log"
+    )
+    try:
+        notifier.send(message)
+        log.info("daily digest sent")
+    except Exception as exc:
+        log.warning("daily digest send failed: %s", exc)
+
+
 def send_watchlist_pulse(cfg, notifier, state, now):
     """Send an hourly digest of high-conviction tokens building toward a signal.
 
@@ -2636,13 +2801,17 @@ def run_cycle(dex, cfg, notifier, state, now, force_discovery=False):
                 tg_sent += 1
 
     # ── Hourly watchlist pulse ───────────────────────────────────────────────
-    # Fires once per hour regardless of whether any alert was sent.
-    # Gives a regular "here's what we're watching" digest so there's always
-    # something useful in Telegram even during quiet market periods.
     pulse_interval = cfg.get("watchlist_pulse_interval_seconds", 3600)
     if now - state.get("last_watchlist_pulse_ts", 0) >= pulse_interval:
         send_watchlist_pulse(cfg, notifier, state, now)
         state["last_watchlist_pulse_ts"] = now
+
+    # ── Daily system digest ─────────────────────────────────────────────────
+    # Fires once per day — a full status report covering signals, RL model,
+    # backtest coverage, and top watchlist. Replaces having to check logs manually.
+    if now - state.get("last_daily_digest_ts", 0) >= 86400:
+        _send_daily_digest(notifier, state, now)
+        state["last_daily_digest_ts"] = now
 
     prune_token_state(state, cfg["pair_state_ttl_seconds"], now)
     log.info(
