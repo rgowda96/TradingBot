@@ -45,6 +45,9 @@ WATCHLIST_FILE = "micro_watchlist.json"
 GECKO_URL      = "https://api.geckoterminal.com/api/v2"
 CG_URL         = "https://api.coingecko.com/api/v3"
 LLAMA_URL      = "https://api.llama.fi"
+DEX_URL        = "https://api.dexscreener.com"
+BIRDEYE_URL    = "https://public-api.birdeye.so"
+GOPLUS_URL     = "https://api.gopluslabs.io/api/v1"
 
 MEME_KEYWORDS = {
     "doge","pepe","shib","inu","moon","safe","elon","baby","floki","bonk",
@@ -343,6 +346,499 @@ def fetch_dex_boosts(chain_id: str = "base") -> list:
     return results
 
 # ─────────────────────────────────────────────────────────────────────────────
+# SOURCE 7: GeckoTerminal — brand new pools (< 7 days old, first signs of life)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def fetch_gt_new_pools(chain: str, min_liq: float, min_vol: float,
+                       max_age_days: int = 7,
+                       min_mcap: float = 5_000,
+                       max_mcap: float = 1_000_000) -> list:
+    """
+    Brand-new pools: age ≤ max_age_days, liq + vol already showing.
+    These are the EARLIEST possible signal — first 1-7 days of life.
+    High risk / highest potential reward. Always cross-check with GoPlus.
+    """
+    results = []
+    headers = {"Accept": "application/json;version=20230302"}
+    url = f"{GECKO_URL}/networks/{chain}/new_pools?include=base_token&page=1"
+    try:
+        r = requests.get(url, timeout=20, headers=headers)
+        if r.status_code == 429:
+            time.sleep(35)
+            r = requests.get(url, timeout=20, headers=headers)
+        if r.status_code != 200:
+            print(f"    [GT/{chain.upper()}/new] HTTP {r.status_code}", flush=True)
+            return []
+
+        for pool in r.json().get("data", []):
+            attrs   = pool.get("attributes", {})
+            created = attrs.get("pool_created_at", "")
+            age     = days_since(created) if created else -1
+            if age < 0 or age > max_age_days:
+                continue
+
+            mcap  = safe_float(attrs.get("market_cap_usd") or attrs.get("fdv_usd"))
+            liq   = safe_float(attrs.get("reserve_in_usd"))
+            vol24 = safe_float((attrs.get("volume_usd") or {}).get("h24"))
+
+            if not (min_mcap <= mcap <= max_mcap): continue
+            if liq  < min_liq:  continue
+            if vol24 < min_vol: continue
+
+            # Minimum activity gate — must have real txns, not just deployed
+            txns_h24 = (attrs.get("transactions") or {}).get("h24") or {}
+            buys  = int(txns_h24.get("buys", 0)  or 0)
+            sells = int(txns_h24.get("sells", 0) or 0)
+            if buys + sells < 20:
+                continue
+
+            attrs["_age_days"] = age
+            pool["_chain"]  = chain
+            pool["_mcap"]   = mcap
+            pool["_liq"]    = liq
+            pool["_vol24h"] = vol24
+            pool["_score"]  = conviction_score(pool)
+            pool["_source"] = "gt_new"
+            results.append(pool)
+
+        print(f"    [GT/{chain.upper()}/new] {len(results)} new pools ≤{max_age_days}d with activity", flush=True)
+    except Exception as e:
+        print(f"    [GT/{chain.upper()}/new] Error: {e}", flush=True)
+    return results
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SOURCE 8: GeckoTerminal — multi-network cross-chain momentum signals
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Tokens gaining traction on ETH mainnet / Arbitrum often arrive on Base 2-4 weeks later.
+# Tracking these networks gives an advance warning of what's coming to Base.
+CROSS_CHAIN_NETWORKS = [
+    "eth",        # Ethereum mainnet — protocols launch here first
+    "arbitrum",   # Arbitrum — DeFi hub, often mirrors Base trends
+    "optimism",   # OP stack sibling of Base
+]
+
+def fetch_gt_crosschain(min_mcap: float = 100_000,
+                        max_mcap: float = 10_000_000,
+                        min_liq: float  = 50_000,
+                        pages: int      = 2) -> list:
+    """
+    Trending tokens on ETH/Arbitrum/Optimism.
+    Tokens pumping on ETH but not yet on Base = arbitrage opportunity.
+    Also: if a protocol gains TVL on these chains, Base deployment often follows.
+    """
+    results = []
+    headers = {"Accept": "application/json;version=20230302"}
+
+    for network in CROSS_CHAIN_NETWORKS:
+        for page in range(1, pages + 1):
+            url = f"{GECKO_URL}/networks/{network}/trending_pools?page={page}"
+            try:
+                r = requests.get(url, timeout=20, headers=headers)
+                if r.status_code == 429:
+                    time.sleep(35)
+                    r = requests.get(url, timeout=20, headers=headers)
+                if r.status_code != 200:
+                    break
+
+                added = 0
+                for pool in r.json().get("data", []):
+                    attrs = pool.get("attributes", {})
+                    mcap  = safe_float(attrs.get("market_cap_usd") or attrs.get("fdv_usd"))
+                    liq   = safe_float(attrs.get("reserve_in_usd"))
+                    if not (min_mcap <= mcap <= max_mcap): continue
+                    if liq < min_liq: continue
+                    pool["_chain"]  = network
+                    pool["_mcap"]   = mcap
+                    pool["_liq"]    = liq
+                    pool["_vol24h"] = safe_float((attrs.get("volume_usd") or {}).get("h24"))
+                    pool["_score"]  = conviction_score(pool)
+                    pool["_source"] = f"gt_xchain_{network}"
+                    results.append(pool)
+                    added += 1
+
+                time.sleep(1.0)
+            except Exception as e:
+                print(f"    [GT/xchain/{network}] p{page} error: {e}", flush=True)
+                break
+
+    print(f"    [GT/xchain] {len(results)} cross-chain signals (ETH/ARB/OP trending)", flush=True)
+    return results
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SOURCE 9: CoinGecko trending + recently added
+# ─────────────────────────────────────────────────────────────────────────────
+
+def fetch_cg_trending() -> list:
+    """
+    CoinGecko's trending search — 15 most-searched coins last 24h globally.
+    These are on everyone's radar RIGHT NOW. Great for confirming narratives.
+    """
+    results = []
+    try:
+        r = requests.get(f"{CG_URL}/search/trending", timeout=20,
+                         headers={"Accept": "application/json"})
+        if r.status_code == 429:
+            time.sleep(65)
+            r = requests.get(f"{CG_URL}/search/trending", timeout=20)
+        if r.status_code != 200:
+            print(f"    [CG/trending] HTTP {r.status_code}", flush=True)
+            return []
+
+        for item in r.json().get("coins", []):
+            coin = item.get("item") or {}
+            results.append({
+                "_source":  "cg_trending",
+                "id":       coin.get("id", ""),
+                "name":     coin.get("name", "?"),
+                "symbol":   coin.get("symbol", "?").upper(),
+                "rank":     coin.get("market_cap_rank"),
+                "score":    safe_float(coin.get("score")),
+                "thumb":    coin.get("thumb", ""),
+                "price_btc": safe_float(coin.get("price_btc")),
+            })
+        print(f"    [CG/trending] {len(results)} trending coins (global, last 24h)", flush=True)
+    except Exception as e:
+        print(f"    [CG/trending] Error: {e}", flush=True)
+    return results
+
+
+def fetch_cg_recently_added(min_mcap: float = 5_000,
+                             max_mcap: float = 5_000_000) -> list:
+    """
+    CoinGecko coins added to the platform in the last 7 days.
+    Being listed on CoinGecko is a legitimacy signal — scams rarely get listed.
+    New + small + growing = high potential.
+    """
+    results = []
+    try:
+        r = requests.get(f"{CG_URL}/coins/list/new", timeout=20,
+                         headers={"Accept": "application/json"})
+        if r.status_code == 429:
+            time.sleep(65)
+            r = requests.get(f"{CG_URL}/coins/list/new", timeout=20)
+        if r.status_code != 200:
+            print(f"    [CG/new] HTTP {r.status_code}", flush=True)
+            return []
+
+        for coin in r.json():
+            # Get basic market data for each new coin (batch of 50 limit)
+            results.append({
+                "_source": "cg_new_listing",
+                "id":      coin.get("id", ""),
+                "name":    coin.get("name", "?"),
+                "symbol":  coin.get("symbol", "?").upper(),
+                "activated_at": coin.get("activated_at"),
+            })
+        print(f"    [CG/new] {len(results)} recently listed tokens", flush=True)
+    except Exception as e:
+        print(f"    [CG/new] Error: {e}", flush=True)
+    return results
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SOURCE 10: DexScreener — global trending + latest boosted (all chains)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def fetch_dex_global_trending() -> list:
+    """
+    DexScreener's top boosted tokens across ALL chains.
+    Tokens that teams pay to boost are serious projects — cheap to verify.
+    Cross-chain boosts on Base = high confidence signal.
+    """
+    results = []
+    for endpoint in [
+        f"{DEX_URL}/token-boosts/top/v1",
+        f"{DEX_URL}/token-boosts/latest/v1",
+    ]:
+        try:
+            r = requests.get(endpoint, timeout=15)
+            if r.status_code == 200:
+                for item in r.json():
+                    item["_source"]  = "dex_boost_global"
+                    item["_chain"]   = item.get("chainId", "unknown")
+                    results.append(item)
+        except Exception as e:
+            print(f"    [DEX/global] Error {endpoint}: {e}", flush=True)
+
+    print(f"    [DEX/global boosts] {len(results)} total across all chains", flush=True)
+    return results
+
+
+def fetch_dex_token_search_extended(terms: list, chains: list) -> list:
+    """
+    DexScreener text search for additional narrative-aligned terms.
+    Catches tokens not in GeckoTerminal trending that match our narrative buckets.
+    """
+    results = []
+    NARRATIVE_TERMS = [
+        "ai", "agent", "depin", "rwa", "yield", "vault", "lend",
+        "borrow", "perp", "option", "oracle", "bridge", "stake",
+        "launch", "pad", "factory", "protocol", "finance",
+    ]
+    # Only search terms not already in the main config list
+    extra_terms = [t for t in NARRATIVE_TERMS if t not in (terms or [])]
+
+    for term in extra_terms[:8]:    # cap at 8 to limit API calls
+        try:
+            r = requests.get(f"{DEX_URL}/latest/dex/search?q={term}", timeout=15)
+            if r.status_code != 200:
+                continue
+            for pair in r.json().get("pairs", []):
+                if pair.get("chainId") not in chains:
+                    continue
+                mcap = safe_float(pair.get("marketCap") or pair.get("fdv") or 0)
+                liq  = safe_float((pair.get("liquidity") or {}).get("usd") or 0)
+                if mcap < 5_000 or mcap > 2_000_000: continue
+                if liq  < 1_000: continue
+                base_tok = pair.get("baseToken") or {}
+                results.append({
+                    "_source":  f"dex_search_{term}",
+                    "_chain":   pair.get("chainId"),
+                    "_mcap":    mcap,
+                    "_liq":     liq,
+                    "_vol24h":  safe_float((pair.get("volume") or {}).get("h24")),
+                    "_score":   0,  # DexScreener pairs not pool format, skip GT scorer
+                    "address":  base_tok.get("address", ""),
+                    "name":     base_tok.get("name", "?"),
+                    "symbol":   base_tok.get("symbol", "?"),
+                    "url":      pair.get("url", ""),
+                })
+            time.sleep(0.5)
+        except Exception:
+            pass
+
+    print(f"    [DEX/extended search] {len(results)} narrative-aligned tokens", flush=True)
+    return results
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SOURCE 11: DeFiLlama — yield opportunities growing (money flowing into DeFi)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def fetch_defillama_yields(min_apy: float   = 20.0,
+                           max_tvl: float   = 5_000_000,
+                           min_tvl: float   = 100_000,
+                           chains: list     = None) -> list:
+    """
+    Yield pools on Base/Solana with high APY and small TVL.
+    High APY + growing TVL = capital is flowing in.
+    Protocol has a token or is about to launch one.
+    Source: https://yields.llama.fi/pools (no rate limit, no key)
+    """
+    target_chains = set(c.capitalize() for c in (chains or ["Base", "Solana"]))
+    results = []
+    try:
+        r = requests.get("https://yields.llama.fi/pools", timeout=30)
+        if r.status_code != 200:
+            print(f"    [DeFiLlama/yield] HTTP {r.status_code}", flush=True)
+            return []
+
+        pools = r.json().get("data", [])
+        for p in pools:
+            if p.get("chain") not in target_chains:
+                continue
+            tvl = safe_float(p.get("tvlUsd"))
+            apy = safe_float(p.get("apy"))
+            if not (min_tvl <= tvl <= max_tvl): continue
+            if apy < min_apy: continue
+
+            results.append({
+                "_source":   "defillama_yield",
+                "project":   p.get("project", "?"),
+                "symbol":    p.get("symbol",  "?"),
+                "chain":     p.get("chain",   "?").lower(),
+                "tvl":       tvl,
+                "apy":       apy,
+                "apy_base":  safe_float(p.get("apyBase")),
+                "apy_reward": safe_float(p.get("apyReward")),
+                "pool_id":   p.get("pool",    ""),
+                "url":       p.get("url",     ""),
+            })
+
+        results.sort(key=lambda x: -x["apy"])
+        results = results[:20]   # top 20 highest APY small pools
+        print(f"    [DeFiLlama/yield] {len(results)} high-APY small pools on Base/Solana", flush=True)
+    except Exception as e:
+        print(f"    [DeFiLlama/yield] Error: {e}", flush=True)
+    return results
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SOURCE 12: DeFiLlama — protocol revenue (real money generating protocols)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def fetch_defillama_revenue(chains: list = None,
+                             max_mcap_mult: float = 20.0) -> list:
+    """
+    Protocols generating real revenue on Base/Solana.
+    Revenue / MCap < 0.05 = severely undervalued relative to earnings.
+    This is the FUNDAMENTALS signal — revenue is undeniable.
+    Source: https://api.llama.fi/overview/fees (no key, no rate limit)
+    """
+    target_chains = set(c.capitalize() for c in (chains or ["Base", "Solana"]))
+    results = []
+    try:
+        r = requests.get(f"{LLAMA_URL}/overview/fees?excludeTotalDataChart=true"
+                          "&excludeTotalDataChartBreakdown=true", timeout=30)
+        if r.status_code != 200:
+            print(f"    [DeFiLlama/fees] HTTP {r.status_code}", flush=True)
+            return []
+
+        for p in r.json().get("protocols", []):
+            # Must be active on target chains
+            p_chains = set(p.get("chains") or [])
+            if not p_chains.intersection(target_chains):
+                continue
+            daily_rev = safe_float(p.get("total24h"))
+            if daily_rev < 1_000:   # min $1K/day real revenue
+                continue
+            results.append({
+                "_source":       "defillama_revenue",
+                "name":          p.get("name",   "?"),
+                "displayName":   p.get("displayName", "?"),
+                "chains":        list(p_chains),
+                "daily_revenue": daily_rev,
+                "weekly_revenue": safe_float(p.get("total7d")),
+                "monthly_revenue": safe_float(p.get("total30d")),
+                "revenue_change_1d": safe_float(p.get("change_1d")),
+                "category":      p.get("category", ""),
+                "url":           p.get("url", ""),
+            })
+
+        results.sort(key=lambda x: -x["daily_revenue"])
+        results = results[:20]
+        print(f"    [DeFiLlama/revenue] {len(results)} revenue-generating protocols on Base/Solana", flush=True)
+    except Exception as e:
+        print(f"    [DeFiLlama/revenue] Error: {e}", flush=True)
+    return results
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SOURCE 13: Birdeye — Solana + Base token list (optional API key)
+# Set BIRDEYE_API_KEY env var. Free tier: 1M credits/month.
+# https://docs.birdeye.so/
+# ─────────────────────────────────────────────────────────────────────────────
+
+def fetch_birdeye_trending(chain: str = "base",
+                           min_mcap: float = 10_000,
+                           max_mcap: float = 1_000_000,
+                           api_key: str    = "") -> list:
+    """
+    Birdeye's token list sorted by 24H volume change — catches early momentum.
+    Requires BIRDEYE_API_KEY env var. Skips gracefully if not set.
+    Free tier: 1M credits/month (enough for daily scans).
+    """
+    if not api_key:
+        return []
+
+    birdeye_chain = {"base": "base", "solana": "solana"}.get(chain, "base")
+    results = []
+    headers = {
+        "accept":    "application/json",
+        "x-api-key": api_key,
+        "x-chain":   birdeye_chain,
+    }
+
+    try:
+        url = (f"{BIRDEYE_URL}/defi/tokenlist"
+               f"?sort_by=v24hChangePercent&sort_type=desc"
+               f"&offset=0&limit=50&min_liquidity=1000")
+        r = requests.get(url, timeout=20, headers=headers)
+        if r.status_code == 401:
+            print(f"    [Birdeye] Invalid API key — skipping", flush=True)
+            return []
+        if r.status_code != 200:
+            print(f"    [Birdeye] HTTP {r.status_code}", flush=True)
+            return []
+
+        for tok in r.json().get("data", {}).get("tokens", []):
+            mcap = safe_float(tok.get("mc") or tok.get("marketCap"))
+            liq  = safe_float(tok.get("liquidity") or tok.get("realLiquidity"))
+            if not (min_mcap <= mcap <= max_mcap): continue
+            if liq < 1_000: continue
+
+            results.append({
+                "_source":  "birdeye",
+                "_chain":   chain,
+                "_mcap":    mcap,
+                "_liq":     liq,
+                "_vol24h":  safe_float(tok.get("v24hUSD")),
+                "_score":   0,
+                "name":     tok.get("name",   "?"),
+                "symbol":   tok.get("symbol", "?").upper(),
+                "address":  tok.get("address", ""),
+                "v24h_change_pct": safe_float(tok.get("v24hChangePercent")),
+                "price_change_24h": safe_float(tok.get("priceChange24hPercent")),
+            })
+
+        print(f"    [Birdeye/{chain}] {len(results)} tokens by vol change (API key set)", flush=True)
+    except Exception as e:
+        print(f"    [Birdeye/{chain}] Error: {e}", flush=True)
+    return results
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SOURCE 14: GoPlus Security — token risk check (free, no key required)
+# Run post-discovery to filter out honeypots and high-risk tokens
+# https://gopluslabs.io/
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Base chain ID = 8453 on GoPlus
+GOPLUS_CHAIN_IDS = {"base": "8453", "solana": "solana"}
+
+def check_goplus_risk(addresses: list, chain: str = "base") -> dict:
+    """
+    Batch risk check for discovered token addresses.
+    Returns dict: address → risk_info with fields:
+        is_honeypot, is_mintable, has_blacklist, sell_tax, buy_tax, holder_count
+    Only called for high-score tokens to save API budget.
+    Free tier: no key required, but rate-limited.
+    """
+    chain_id = GOPLUS_CHAIN_IDS.get(chain)
+    if not chain_id or not addresses:
+        return {}
+
+    results = {}
+    # GoPlus takes up to 20 addresses per call
+    for i in range(0, len(addresses), 20):
+        batch = addresses[i:i+20]
+        addr_str = ",".join(batch)
+        try:
+            r = requests.get(
+                f"{GOPLUS_URL}/token_security/{chain_id}",
+                params={"contract_addresses": addr_str},
+                timeout=20,
+            )
+            if r.status_code == 429:
+                time.sleep(10)
+                continue
+            if r.status_code != 200:
+                continue
+
+            for addr, info in r.json().get("result", {}).items():
+                results[addr.lower()] = {
+                    "is_honeypot":   info.get("is_honeypot") == "1",
+                    "is_mintable":   info.get("is_mintable") == "1",
+                    "has_blacklist": info.get("is_blacklisted") == "1",
+                    "sell_tax":      safe_float(info.get("sell_tax")) * 100,
+                    "buy_tax":       safe_float(info.get("buy_tax")) * 100,
+                    "holder_count":  int(info.get("holder_count") or 0),
+                    "open_source":   info.get("is_open_source") == "1",
+                    "lp_locked":     info.get("lp_total_supply", "0") != "0",
+                }
+            time.sleep(0.5)
+        except Exception as e:
+            print(f"    [GoPlus] Error: {e}", flush=True)
+            break
+
+    print(f"    [GoPlus] Risk checked {len(results)} addresses", flush=True)
+    return results
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Deduplication across sources
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -475,7 +971,22 @@ def update_watchlist(wl: dict, pools: list,
 def build_report(pools: list, cg_coins: list, defillama: list,
                  dex_boosts: list, changes: dict, wl: dict,
                  run_date: str, chains: list,
-                 min_mcap: float, max_mcap: float) -> str:
+                 min_mcap: float, max_mcap: float,
+                 new_pools: list = None,
+                 cg_trending: list = None,
+                 cg_new: list = None,
+                 llama_yields: list = None,
+                 llama_revenue: list = None,
+                 crosschain: list = None,
+                 goplus_risks: dict = None) -> str:
+
+    new_pools     = new_pools     or []
+    cg_trending   = cg_trending   or []
+    cg_new        = cg_new        or []
+    llama_yields  = llama_yields  or []
+    llama_revenue = llama_revenue or []
+    crosschain    = crosschain    or []
+    goplus_risks  = goplus_risks  or {}
 
     lines = []
     lines.append("# 🔬 Micro-Cap Radar — Full Multi-Source Report")
@@ -483,7 +994,11 @@ def build_report(pools: list, cg_coins: list, defillama: list,
         f"**Date:** {run_date}  |  **Chains:** {', '.join(c.upper() for c in chains)}  |  "
         f"**MCap:** ${min_mcap/1e3:.0f}K – ${max_mcap/1e6:.1f}M\n"
     )
-    lines.append("**Sources:** GeckoTerminal (trending+6H+vol) · DeFiLlama · CoinGecko · DexScreener\n")
+    lines.append(
+        "**Sources:** GeckoTerminal (trending+vol+tx+new) · DeFiLlama (TVL+yield+revenue) · "
+        "CoinGecko (categories+trending+new) · DexScreener (boosts+search) · "
+        "Cross-chain (ETH/ARB/OP) · GoPlus (security)\n"
+    )
     lines.append("---\n")
 
     watching  = sum(1 for t in wl["tokens"].values() if t["status"] == "watching")
@@ -720,6 +1235,117 @@ def build_report(pools: list, cg_coins: list, defillama: list,
             lines.append(f"- [{tag}] **{name}** — {url}")
         lines.append("")
 
+    # ── BRAND NEW POOLS (< 7 days old) ────────────────────────────────────────
+    if new_pools:
+        lines.append("## 🆕🔥 Brand New Pools (< 7 Days Old — Earliest Entry)\n")
+        lines.append("*Highest risk + highest reward. Always run GoPlus check before buying.*\n")
+        for p in sorted(new_pools, key=lambda x: x.get("_score", 0), reverse=True)[:8]:
+            attrs = p.get("attributes", {})
+            pname = attrs.get("name", "?")
+            mcap  = p.get("_mcap",  0)
+            liq   = p.get("_liq",   0)
+            age   = attrs.get("_age_days", -1)
+            score = p.get("_score", 0)
+            pc    = attrs.get("price_change_percentage", {})
+            h6    = safe_float(pc.get("h6"))
+            chain = p.get("_chain", "base").upper()
+            addr  = attrs.get("address", "")
+
+            # GoPlus risk flag
+            risk_info = goplus_risks.get(addr.lower())
+            risk_txt  = ""
+            if risk_info:
+                flags = []
+                if risk_info.get("is_honeypot"):  flags.append("🚨 HONEYPOT")
+                if risk_info.get("is_mintable"):  flags.append("⚠️ mintable")
+                if risk_info.get("sell_tax", 0) > 10: flags.append(f"⚠️ {risk_info['sell_tax']:.0f}% sell tax")
+                risk_txt = "  " + " ".join(flags) if flags else "  ✅ clean"
+
+            lines.append(
+                f"- **{pname}** | {chain} | ${mcap:,.0f} MCap | Liq ${liq:,.0f} | "
+                f"6H {h6:+.1f}% | {age}d old | {score}/100{risk_txt}"
+            )
+        lines.append("")
+
+    # ── GOPLUS RISK SUMMARY ────────────────────────────────────────────────────
+    if goplus_risks:
+        honeypots = [a for a, r in goplus_risks.items() if r.get("is_honeypot")]
+        if honeypots:
+            lines.append(f"## 🚨 GoPlus Honeypot Alerts ({len(honeypots)} detected)\n")
+            lines.append("*These addresses failed the honeypot check. Do NOT buy.*\n")
+            for addr in honeypots[:5]:
+                lines.append(f"- `{addr}`")
+            lines.append("")
+
+    # ── CROSS-CHAIN MOMENTUM (ETH/ARB/OP) ─────────────────────────────────────
+    if crosschain:
+        lines.append("## 🌐 Cross-Chain Momentum (ETH / Arbitrum / Optimism)\n")
+        lines.append("*Tokens trending on mainnet/Arbitrum often arrive on Base 2-4 weeks later.*\n")
+        xchain_sorted = sorted(crosschain, key=lambda p: p.get("_score", 0), reverse=True)[:8]
+        for p in xchain_sorted:
+            attrs = p.get("attributes", {})
+            pname = attrs.get("name", "?")
+            mcap  = p.get("_mcap", 0)
+            liq   = p.get("_liq",  0)
+            chain = p.get("_chain", "?").upper()
+            pc    = attrs.get("price_change_percentage", {})
+            h6    = safe_float(pc.get("h6"))
+            h24   = safe_float(pc.get("h24"))
+            score = p.get("_score", 0)
+            lines.append(
+                f"- **{pname}** | {chain} | ${mcap:,.0f} MCap | Liq ${liq:,.0f} | "
+                f"6H {h6:+.1f}% | 24H {h24:+.1f}% | {score}/100"
+            )
+        lines.append("")
+
+    # ── COINGECKO TRENDING (global) ────────────────────────────────────────────
+    if cg_trending:
+        lines.append("## 🔥 CoinGecko Trending (Global — Top 15 Most Searched)\n")
+        lines.append("*These are what everyone is searching right now. Narrative confirmation.*\n")
+        for i, coin in enumerate(cg_trending[:10], 1):
+            rank = coin.get("rank", "?")
+            lines.append(
+                f"{i:>2}. **{coin['name']} ({coin['symbol']})** | "
+                f"CMC Rank {rank}"
+            )
+        lines.append("")
+
+    # ── COINGECKO RECENTLY ADDED ───────────────────────────────────────────────
+    if cg_new:
+        lines.append("## 🆕 CoinGecko Recently Listed (Last 7 Days)\n")
+        lines.append("*Being listed on CoinGecko = passed basic legitimacy checks. Watch these.*\n")
+        for coin in cg_new[:10]:
+            ts = coin.get("activated_at", "")
+            ts_txt = ts[:10] if ts else "?"
+            lines.append(f"- **{coin['name']} ({coin['symbol']})** — listed {ts_txt} | id: `{coin['id']}`")
+        lines.append("")
+
+    # ── DEFILLAMA YIELD SIGNALS ────────────────────────────────────────────────
+    if llama_yields:
+        lines.append("## 💰 DeFiLlama — High-APY Small Yield Pools (Base + Solana)\n")
+        lines.append("*High APY + small TVL = protocol needs liquidity badly = token incentive coming.*\n")
+        for p in llama_yields[:10]:
+            reward_note = f" (reward: {p['apy_reward']:.0f}%)" if p.get("apy_reward", 0) > 0 else ""
+            lines.append(
+                f"- **{p['project']} — {p['symbol']}** | {p['chain'].upper()} | "
+                f"TVL ${p['tvl']:,.0f} | APY {p['apy']:.0f}%{reward_note}"
+            )
+        lines.append("")
+
+    # ── DEFILLAMA REVENUE LEADERS ──────────────────────────────────────────────
+    if llama_revenue:
+        lines.append("## 📈 DeFiLlama — Real Revenue Generators (Base + Solana)\n")
+        lines.append("*Protocols generating $1K+/day in fees = real users, real product.*\n")
+        for p in llama_revenue[:10]:
+            chg  = p.get("revenue_change_1d", 0)
+            sign = "+" if chg >= 0 else ""
+            lines.append(
+                f"- **{p['displayName']}** | {', '.join(p['chains'][:2])} | "
+                f"Daily ${p['daily_revenue']:,.0f} | 7D ${p['weekly_revenue']:,.0f} | "
+                f"1D chg {sign}{chg:.0f}%"
+            )
+        lines.append("")
+
     # ── HOW TO USE ─────────────────────────────────────────────────────────────
     lines.append("## 🧭 How to Read This Report\n")
     lines.append("| Signal | What it means |")
@@ -763,97 +1389,174 @@ def main():
     except AttributeError:
         pass
 
+    import os
+    birdeye_key = os.environ.get("BIRDEYE_API_KEY", "")
+
     chains   = [c.strip().lower() for c in args.chain.split(",")]
     run_date = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     today    = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     sep = "=" * 64
 
+    source_count = 14  # total data sources
     print(f"\n{sep}")
     print(f"  🔬 Micro-Cap Radar  {run_date}")
     print(f"  Chains: {', '.join(c.upper() for c in chains)}")
     print(f"  MCap ${args.min_mcap/1e3:.0f}K–${args.max_mcap/1e6:.1f}M | "
           f"Min liq ${args.min_liq:,.0f} | Min vol ${args.min_vol:,.0f}")
-    print(f"  Sources: GeckoTerminal (3 sorts) · DeFiLlama · CoinGecko · DexScreener")
+    print(f"  Sources: {source_count} data sources active")
+    if birdeye_key:
+        print(f"  Birdeye: API key found ✓")
+    else:
+        print(f"  Birdeye: set BIRDEYE_API_KEY env var to enable")
     print(f"{sep}\n")
 
     wl = load_watchlist()
     print(f"  Watchlist loaded: {len(wl['tokens'])} DEX tokens, "
           f"{len(wl.get('defi_protocols', {}))} DeFiLlama protocols\n")
 
-    # ── Fetch from all sources ──────────────────────────────────────────────
-    all_pools = []
+    # ── SOURCE 1-3: GeckoTerminal standard sorts ────────────────────────────
+    all_pools  = []
+    new_pools  = []
 
     for chain in chains:
         if chain not in {"base", "solana"}:
             print(f"  [SKIP] Unknown chain: {chain}")
             continue
 
-        # GT trending (trending score)
         print(f"  [GT/{chain.upper()}] trending pools...", flush=True)
         p1 = fetch_gt_pools(chain, "trending", args.pages,
                              args.min_mcap, args.max_mcap,
                              args.min_liq, args.min_vol, args.min_age)
         print(f"  → {len(p1)} pools", flush=True)
 
-        # GT 24H volume (sustained buying interest)
         print(f"  [GT/{chain.upper()}] 24H volume sort...", flush=True)
         p2 = fetch_gt_pools(chain, "h24_volume_usd_desc", min(args.pages, 3),
                              args.min_mcap, args.max_mcap,
                              args.min_liq, args.min_vol, args.min_age)
         print(f"  → {len(p2)} pools", flush=True)
 
-        # GT 24H transaction count (most active = real users buying)
         print(f"  [GT/{chain.upper()}] 24H tx count sort...", flush=True)
         p3 = fetch_gt_pools(chain, "h24_tx_count_desc", min(args.pages, 3),
                              args.min_mcap, args.max_mcap,
                              args.min_liq, args.min_vol, args.min_age)
-        print(f"  → {len(p3)} pools\n", flush=True)
+        print(f"  → {len(p3)} pools", flush=True)
+
+        # ── SOURCE 7: New pools < 7 days ─────────────────────────────────────
+        print(f"  [GT/{chain.upper()}] new pools (< 7 days)...", flush=True)
+        np = fetch_gt_new_pools(chain, args.min_liq, args.min_vol,
+                                 min_mcap=args.min_mcap, max_mcap=args.max_mcap)
+        new_pools.extend(np)
+        print(f"  → {len(np)} new pools\n", flush=True)
 
         all_pools.extend(p1 + p2 + p3)
 
     all_pools = dedup_pools(all_pools)
-    # Client-side re-sort by 6H change so best movers float to top
-    # (GT API doesn't support h6 sort server-side)
     all_pools.sort(
         key=lambda p: safe_float((p.get("attributes", {}).get("price_change_percentage") or {}).get("h6")),
         reverse=True
     )
     print(f"  After dedup + 6H sort: {len(all_pools)} unique pools\n", flush=True)
 
-    # DeFiLlama Base protocols
-    print("  [DeFiLlama] Base protocols with growing TVL...")
+    # ── SOURCE 4: DeFiLlama TVL ─────────────────────────────────────────────
+    print("  [DeFiLlama] Base protocols with growing TVL...", flush=True)
     defillama = fetch_defillama_base_gems(max_tvl=args.llama_max_tvl)
 
-    # CoinGecko small-cap Base tokens
-    print(f"\n  [CoinGecko] Base ecosystem small-caps...")
+    # ── SOURCE 11: DeFiLlama yield signals ──────────────────────────────────
+    print("  [DeFiLlama] Yield pools (high APY small TVL)...", flush=True)
+    llama_yields = fetch_defillama_yields(chains=chains)
+
+    # ── SOURCE 12: DeFiLlama revenue ────────────────────────────────────────
+    print("  [DeFiLlama] Protocol revenue generators...", flush=True)
+    llama_revenue = fetch_defillama_revenue(chains=chains)
+
+    # ── SOURCE 5: CoinGecko small-cap categories ─────────────────────────────
+    print(f"\n  [CoinGecko] Base ecosystem small-caps...", flush=True)
     cg_coins = fetch_cg_small_cap_base(args.min_mcap, args.max_mcap, pages=2)
-    print(f"  → {len(cg_coins)} CoinGecko tokens in range\n")
+    print(f"  → {len(cg_coins)} CoinGecko tokens in range", flush=True)
 
-    # DexScreener boosts
-    print("  [DexScreener] Base boosts + profiles...")
+    # ── SOURCE 9: CoinGecko trending ─────────────────────────────────────────
+    print("  [CoinGecko] Global trending...", flush=True)
+    cg_trending = fetch_cg_trending()
+    time.sleep(2)
+
+    # ── SOURCE 9b: CoinGecko recently added ──────────────────────────────────
+    print("  [CoinGecko] Recently listed...", flush=True)
+    cg_new = fetch_cg_recently_added()
+    time.sleep(2)
+
+    # ── SOURCE 6: DexScreener boosts ─────────────────────────────────────────
+    print("\n  [DexScreener] Base boosts + profiles...", flush=True)
     dex_boosts = fetch_dex_boosts("base")
-    print(f"  → {len(dex_boosts)} signals\n")
+    print(f"  → {len(dex_boosts)} signals", flush=True)
 
-    # Update watchlist
-    print("  Updating watchlist...")
-    changes = update_watchlist(wl, all_pools, defillama, today)
+    # ── SOURCE 10: DexScreener global trending ───────────────────────────────
+    print("  [DexScreener] Global boosts (all chains)...", flush=True)
+    dex_global = fetch_dex_global_trending()
+
+    # ── SOURCE 10b: DexScreener extended search ──────────────────────────────
+    print("  [DexScreener] Extended narrative search...", flush=True)
+    dex_search_extra = fetch_dex_token_search_extended(
+        terms=[],
+        chains=chains
+    )
+
+    # ── SOURCE 8: Cross-chain momentum ──────────────────────────────────────
+    print("\n  [GT/xchain] ETH / Arbitrum / Optimism trending...", flush=True)
+    crosschain = fetch_gt_crosschain()
+
+    # ── SOURCE 13: Birdeye (optional) ────────────────────────────────────────
+    birdeye_pools = []
+    if birdeye_key:
+        print("\n  [Birdeye] Trending tokens by vol change...", flush=True)
+        for chain in chains:
+            bp = fetch_birdeye_trending(chain=chain,
+                                        min_mcap=args.min_mcap,
+                                        max_mcap=args.max_mcap,
+                                        api_key=birdeye_key)
+            birdeye_pools.extend(bp)
+
+    # ── SOURCE 14: GoPlus security check on top new pools ────────────────────
+    goplus_risks = {}
+    high_score_new_addrs = [
+        p.get("attributes", {}).get("address", "")
+        for p in new_pools
+        if p.get("_score", 0) >= 40 and p.get("attributes", {}).get("address")
+    ]
+    if high_score_new_addrs:
+        print(f"\n  [GoPlus] Checking {len(high_score_new_addrs)} high-score new pool addresses...", flush=True)
+        for chain in chains:
+            chain_addrs = [a for a in high_score_new_addrs if a.startswith("0x")]  # base
+            if chain_addrs:
+                goplus_risks.update(check_goplus_risk(chain_addrs[:20], chain="base"))
+
+    # ── Update watchlist ──────────────────────────────────────────────────────
+    all_discovered = all_pools + new_pools
+    print("\n  Updating watchlist...")
+    changes = update_watchlist(wl, all_discovered, defillama, today)
     save_watchlist(wl)
     print(f"  → +{len(changes['new'])} new | "
           f"{len(changes['repeats'])} repeats | "
           f"{len(changes['graduates'])} graduates\n")
 
-    # Build report
+    # ── Build report ──────────────────────────────────────────────────────────
     report = build_report(
-        pools      = all_pools,
-        cg_coins   = cg_coins,
-        defillama  = defillama,
-        dex_boosts = dex_boosts,
-        changes    = changes,
-        wl         = wl,
-        run_date   = run_date,
-        chains     = chains,
-        min_mcap   = args.min_mcap,
-        max_mcap   = args.max_mcap,
+        pools         = all_pools,
+        cg_coins      = cg_coins,
+        defillama     = defillama,
+        dex_boosts    = dex_boosts + dex_search_extra,
+        changes       = changes,
+        wl            = wl,
+        run_date      = run_date,
+        chains        = chains,
+        min_mcap      = args.min_mcap,
+        max_mcap      = args.max_mcap,
+        new_pools     = new_pools,
+        cg_trending   = cg_trending,
+        cg_new        = cg_new,
+        llama_yields  = llama_yields,
+        llama_revenue = llama_revenue,
+        crosschain    = crosschain,
+        goplus_risks  = goplus_risks,
     )
 
     print(f"\n{sep}\n")
