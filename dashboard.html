@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>ETH 15m Pyramiding-Short — Paper Trade</title>
+<style>
+  :root{
+    --bg:#0b0e14; --panel:#141925; --panel2:#1b2231; --line:#262e40;
+    --txt:#e6e9ef; --mut:#8b94a7; --grn:#2bd47d; --red:#ff5c6c;
+    --amb:#ffb020; --blu:#4a90ff; --accent:#5b8cff;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--txt);
+    font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+  .wrap{max-width:1180px;margin:0 auto;padding:22px 18px 60px}
+  header{display:flex;flex-wrap:wrap;align-items:center;gap:12px;margin-bottom:8px}
+  h1{font-size:19px;margin:0;font-weight:650}
+  .tag{font-size:11px;color:var(--mut);border:1px solid var(--line);
+    border-radius:999px;padding:3px 9px}
+  .sub{color:var(--mut);font-size:12px;margin:2px 0 18px}
+  .toggle{display:inline-flex;background:var(--panel);border:1px solid var(--line);
+    border-radius:10px;padding:3px;gap:3px;margin-left:auto}
+  .toggle button{background:none;border:0;color:var(--mut);padding:7px 14px;
+    border-radius:7px;cursor:pointer;font-size:13px;font-weight:600}
+  .toggle button.on{background:var(--accent);color:#fff}
+  .desc{background:var(--panel);border:1px solid var(--line);border-radius:10px;
+    padding:11px 14px;color:var(--mut);font-size:12.5px;margin-bottom:16px}
+  .desc b{color:var(--txt)}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));
+    gap:10px;margin-bottom:18px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:11px;padding:13px 14px}
+  .card .k{color:var(--mut);font-size:11px;text-transform:uppercase;letter-spacing:.04em}
+  .card .v{font-size:20px;font-weight:680;margin-top:5px;font-variant-numeric:tabular-nums}
+  .card .s{font-size:11.5px;color:var(--mut);margin-top:3px}
+  .pos{color:var(--grn)} .neg{color:var(--red)} .amb{color:var(--amb)} .blu{color:var(--blu)}
+  .bar{height:7px;background:var(--panel2);border-radius:5px;overflow:hidden;margin-top:8px}
+  .bar>i{display:block;height:100%;background:linear-gradient(90deg,var(--grn),var(--amb))}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;
+    padding:14px 16px;margin-bottom:18px}
+  .panel h2{font-size:13px;margin:0 0 10px;color:var(--mut);font-weight:600;
+    text-transform:uppercase;letter-spacing:.05em}
+  canvas{width:100%;height:300px;display:block}
+  .legend{display:flex;gap:16px;font-size:11.5px;color:var(--mut);margin-top:8px;flex-wrap:wrap}
+  .dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:5px;vertical-align:middle}
+  table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums;font-size:13px}
+  th,td{padding:8px 10px;text-align:right;border-bottom:1px solid var(--line);white-space:nowrap}
+  th{color:var(--mut);font-weight:600;font-size:11px;text-transform:uppercase;
+    letter-spacing:.03em;position:sticky;top:0;background:var(--panel)}
+  th:first-child,td:first-child{text-align:left}
+  td.tm{color:var(--mut);font-size:12px}
+  tbody tr:hover{background:var(--panel2)}
+  .scroll{max-height:430px;overflow:auto;border-radius:8px}
+  .btn{background:var(--panel2);border:1px solid var(--line);color:var(--txt);
+    border-radius:8px;padding:7px 13px;cursor:pointer;font-size:12.5px;font-weight:600}
+  .btn:hover{border-color:var(--accent)}
+  .row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  .muted{color:var(--mut)}
+  .pill{font-size:11px;padding:2px 8px;border-radius:999px;font-weight:600}
+  .pill.hold{background:rgba(255,176,32,.15);color:var(--amb)}
+  .pill.adding{background:rgba(43,212,125,.15);color:var(--grn)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>ETH 15m · Pyramiding Short</h1>
+    <span class="tag" id="tagPair">ETHUSDT</span>
+    <span class="tag" id="tagLev">20x</span>
+    <span class="tag" id="tagCap">$10,000</span>
+    <span class="tag" id="tagStep">+50 / add · 5 ETH</span>
+    <div class="toggle">
+      <button id="btnTrail" class="on" onclick="setMode('trailing')">Trailing fade</button>
+      <button id="btnGrid" onclick="setMode('grid')">Strict grid</button>
+    </div>
+  </header>
+  <div class="sub" id="sub">paper trade · no positions booked · generated —</div>
+
+  <div class="desc" id="modeDesc"></div>
+
+  <div class="grid" id="cards"></div>
+
+  <div class="panel">
+    <h2>Price (15m) &amp; short entries</h2>
+    <canvas id="chart"></canvas>
+    <div class="legend">
+      <span><span class="dot" style="background:#4a90ff"></span>ETH 15m close</span>
+      <span><span class="dot" style="background:#ff5c6c"></span>short entry (5 ETH)</span>
+      <span><span class="dot" style="background:#ffb020"></span>avg entry</span>
+      <span><span class="dot" style="background:#2bd47d"></span>live price</span>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="row" style="margin-bottom:10px">
+      <h2 style="margin:0">Trade log</h2>
+      <span class="muted" id="tradeCount"></span>
+      <button class="btn" style="margin-left:auto" onclick="refreshLive()">↻ Refresh live price</button>
+    </div>
+    <div class="scroll">
+      <table>
+        <thead><tr>
+          <th>#</th><th>Time (UTC)</th><th>Side</th><th>Entry</th><th>Qty</th>
+          <th>Notional</th><th>Margin</th><th>Cum ETH</th><th>Avg entry</th>
+          <th>Margin used</th><th>uPnL @ live</th>
+        </tr></thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<script src="data.js"></script>
+<script>
+let D = window.DATA;
+let MODE = 'trailing';
+let LIVE = D.live_price;
+
+const fmt  = (n,d=2)=> n==null ? '—' : Number(n).toLocaleString('en-US',{minimumFractionDigits:d,maximumFractionDigits:d});
+const usd  = (n,d=2)=> (n<0?'-$':'$')+fmt(Math.abs(n),d);
+const sign = n => n>=0?'pos':'neg';
+
+const DESC = {
+  trailing:`<b>Trailing fade</b> — re-arms the sell level off each new local low, so <b>every 50-pt up-move (bounce) gets sold</b>, never booked. This is the "don't miss any up-move" reading: in a falling / choppy tape it keeps stacking shorts into rallies.`,
+  grid:`<b>Strict grid</b> — shorts every 50-pt level <b>only above the first entry</b> (pure "sell the rise"). It builds a big pyramid only if ETH trends <b>up</b>; over this window ETH fell, so it barely adds.`
+};
+
+function metrics(r){
+  const q = r.cum_qty, avg = r.avg_entry;
+  const upnl = q ? q*(avg-LIVE) : 0;
+  const equity = D.params.capital + upnl;
+  const liq = q ? (D.params.capital + q*avg)/(q*1.005) : null;
+  return {upnl, equity, roi: 100*upnl/D.params.capital,
+          liq, liqDist: liq? 100*(liq-LIVE)/LIVE : null};
+}
+
+function render(){
+  const r = D[MODE];
+  const m = metrics(r);
+  document.getElementById('modeDesc').innerHTML = DESC[MODE];
+  document.getElementById('sub').textContent =
+    `paper trade · no positions booked · ${r.trades.length} adds · generated ${D.generated}`;
+
+  const status = r.halted
+    ? `<span class="pill hold">HOLDING · 90% margin reached</span>`
+    : `<span class="pill adding">ACTIVE · ${fmt(r.margin_pct,1)}% margin used</span>`;
+
+  const cards = [
+    ['Live ETH', usd(LIVE), `start ${usd(r.start_price)} · <span class="${LIVE<r.start_price?'pos':'neg'}">${fmt(100*(LIVE-r.start_price)/r.start_price,2)}%</span>`],
+    ['Total short', `${fmt(r.cum_qty,0)} ETH`, `${r.trades.length} adds @ 5 ETH`],
+    ['Avg entry', usd(r.avg_entry), `live is ${fmt(100*(LIVE-r.avg_entry)/r.avg_entry,2)}% vs avg`],
+    ['Notional', usd(r.notional,0), `${D.params.leverage}x leverage`],
+    ['Unrealized PnL', `<span class="${sign(m.upnl)}">${usd(m.upnl)}</span>`, `short profits as price falls`],
+    ['Equity', `<span class="${m.equity>=D.params.capital?'pos':'neg'}">${usd(m.equity)}</span>`, `ROI <span class="${sign(m.roi)}">${fmt(m.roi,2)}%</span>`],
+    ['Margin used', `${usd(r.margin_used,0)}`, `<div class="bar"><i style="width:${Math.min(100,r.margin_pct/0.9)}%"></i></div><div class="s">${fmt(r.margin_pct,1)}% of cap · cap 90%</div>`],
+    ['Est. liquidation', `<span class="amb">${m.liq?usd(m.liq):'—'}</span>`, m.liqDist!=null?`${fmt(m.liqDist,1)}% above live`:''],
+  ];
+  document.getElementById('cards').innerHTML =
+    `<div class="card" style="grid-column:1/-1;display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+       <div class="k" style="font-size:13px;letter-spacing:0">Status</div>${status}
+       <span class="muted" style="margin-left:auto;font-size:12px">live · started ${D.started_at} · updated ${D.generated}</span>
+     </div>` +
+    cards.map(c=>`<div class="card"><div class="k">${c[0]}</div><div class="v">${c[1]}</div><div class="s">${c[2]}</div></div>`).join('');
+
+  // table
+  document.getElementById('tradeCount').textContent = `${r.trades.length} entries · all SHORT · never closed`;
+  document.getElementById('rows').innerHTML = r.trades.map(t=>{
+    const up = t.qty*(t.entry-LIVE);
+    return `<tr>
+      <td>${t.n}</td><td class="tm">${t.time}</td>
+      <td><span class="neg">SHORT</span></td>
+      <td>${usd(t.entry)}</td><td>${fmt(t.qty,0)}</td>
+      <td>${usd(t.notional,0)}</td><td>${usd(t.margin)}</td>
+      <td>${fmt(t.cum_qty,0)}</td><td>${usd(t.avg_entry)}</td>
+      <td>${usd(t.margin_used,0)}</td>
+      <td class="${sign(up)}">${usd(up)}</td>
+    </tr>`;
+  }).join('');
+
+  drawChart(r);
+}
+
+function drawChart(r){
+  const cv = document.getElementById('chart');
+  const dpr = window.devicePixelRatio||1;
+  const W = cv.clientWidth, H = 300;
+  cv.width = W*dpr; cv.height = H*dpr;
+  const ctx = cv.getContext('2d'); ctx.scale(dpr,dpr);
+  ctx.clearRect(0,0,W,H);
+
+  const cs = D.candles;
+  const now = Date.now();
+  const padL=58, padR=12, padT=12, padB=22;
+
+  // time-domain x (works even with 0 candles, just-started)
+  let xMin = D.start_ts, xMax = now;
+  cs.forEach(c=>{ if(c.t>xMax) xMax=c.t; });
+  if(xMax-xMin < 60000) xMax = xMin + 60000;
+  const xt = ts => padL + (W-padL-padR)*((ts-xMin)/(xMax-xMin));
+
+  // price-domain y
+  let lo=Infinity, hi=-Infinity;
+  cs.forEach(c=>{lo=Math.min(lo,c.low);hi=Math.max(hi,c.high);});
+  r.trades.forEach(t=>{lo=Math.min(lo,t.entry);hi=Math.max(hi,t.entry);});
+  lo=Math.min(lo,LIVE,r.start_price); hi=Math.max(hi,LIVE,r.start_price);
+  if(hi-lo < 20){ const m=(hi+lo)/2; lo=m-20; hi=m+20; }
+  const pad=(hi-lo)*0.08; lo-=pad; hi+=pad;
+  const ys = p => padT + (H-padT-padB)*(1-(p-lo)/(hi-lo));
+
+  ctx.font='10px -apple-system,sans-serif';
+  for(let g=0; g<=4; g++){
+    const p = lo+(hi-lo)*g/4, y=ys(p);
+    ctx.strokeStyle='#1f2636'; ctx.beginPath(); ctx.moveTo(padL,y); ctx.lineTo(W-padR,y); ctx.stroke();
+    ctx.fillStyle='#6b7488'; ctx.textAlign='right'; ctx.fillText('$'+p.toFixed(0), padL-6, y+3);
+  }
+
+  // close line
+  if(cs.length){
+    ctx.strokeStyle='#4a90ff'; ctx.lineWidth=1.4; ctx.beginPath();
+    cs.forEach((c,i)=>{ const x=xt(c.t),y=ys(c.close); i?ctx.lineTo(x,y):ctx.moveTo(x,y); });
+    ctx.lineTo(xt(now), ys(LIVE)); ctx.stroke();
+  }
+
+  const hline=(p,col,dash)=>{ ctx.save(); ctx.setLineDash(dash); ctx.strokeStyle=col; ctx.lineWidth=1;
+    const y=ys(p); ctx.beginPath(); ctx.moveTo(padL,y); ctx.lineTo(W-padR,y); ctx.stroke(); ctx.restore(); };
+  if(r.cum_qty) hline(r.avg_entry,'#ffb020',[5,4]);
+  hline(LIVE,'#2bd47d',[2,3]);
+
+  // entry markers at their fill time (seed short sits at start_ts)
+  r.trades.forEach(t=>{
+    const x=xt(t.ts), y=ys(t.entry);
+    ctx.fillStyle='#ff5c6c'; ctx.beginPath(); ctx.arc(x,y,3.6,0,7); ctx.fill();
+  });
+}
+
+function setMode(m){
+  MODE=m;
+  document.getElementById('btnTrail').classList.toggle('on',m==='trailing');
+  document.getElementById('btnGrid').classList.toggle('on',m==='grid');
+  render();
+}
+
+async function refreshData(){
+  // pull the latest engine output (same-origin over the local server)
+  try{
+    const res = await fetch('./data.json?t='+Date.now());
+    if(res.ok){ D = await res.json(); LIVE = D.live_price; }
+  }catch(e){}
+}
+async function refreshPrice(){
+  // intra-update live price straight from Binance for live uPnL
+  try{
+    const res = await fetch('https://api.binance.com/api/v3/ticker/price?symbol=ETHUSDT');
+    const j = await res.json(); LIVE = Number(j.price);
+  }catch(e){}
+}
+async function refreshLive(){ await refreshPrice(); render(); }
+
+async function tick(){ await refreshData(); await refreshPrice(); render(); }
+
+// init tags
+document.getElementById('tagLev').textContent = D.params.leverage+'x';
+document.getElementById('tagCap').textContent = '$'+D.params.capital.toLocaleString();
+window.addEventListener('resize', ()=>drawChart(D[MODE]));
+render();
+setInterval(tick, 20000);   // self-refresh every 20s
+</script>
+</body>
+</html>
