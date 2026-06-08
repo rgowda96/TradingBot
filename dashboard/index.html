@@ -1,0 +1,767 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ETH/USDT Perpetual — Paper Trading</title>
+<style>
+  :root {
+    --bg:       #0b0e11;
+    --bg2:      #161a1e;
+    --bg3:      #1e2329;
+    --bg4:      #2b3139;
+    --border:   #2b3139;
+    --green:    #0ecb81;
+    --red:      #f6465d;
+    --yellow:   #f0b90b;
+    --blue:     #1890ff;
+    --purple:   #9c6ef8;
+    --orange:   #ff8c00;
+    --text:     #eaecef;
+    --text2:    #848e9c;
+    --text3:    #474d57;
+    --liq-red:  #ff1a1a;
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { background:var(--bg); color:var(--text); font-family:'Inter',system-ui,sans-serif; font-size:13px; }
+
+  /* ── TOP BAR ── */
+  .topbar {
+    display:flex; align-items:center; gap:24px;
+    padding:10px 20px; background:var(--bg2);
+    border-bottom:1px solid var(--border);
+    position:sticky; top:0; z-index:100;
+  }
+  .topbar .logo { font-size:16px; font-weight:700; color:var(--yellow); white-space:nowrap; }
+  .topbar .pair { font-size:18px; font-weight:700; }
+  .topbar .mark-price { font-size:22px; font-weight:700; }
+  .topbar .stat { display:flex; flex-direction:column; gap:2px; }
+  .topbar .stat .label { font-size:11px; color:var(--text2); }
+  .topbar .stat .val   { font-size:13px; font-weight:600; }
+  .regime-badge {
+    margin-left:auto; padding:4px 12px; border-radius:4px;
+    font-size:12px; font-weight:700; letter-spacing:.5px;
+  }
+  .refresh-dot {
+    width:8px; height:8px; border-radius:50%;
+    background:var(--green); animation:pulse 1.5s infinite;
+  }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.3} }
+
+  /* ── GRID ── */
+  .main { display:grid; grid-template-columns:1fr 320px; gap:0; height:calc(100vh - 85px); }
+  .left  { overflow-y:auto; padding:16px; display:flex; flex-direction:column; gap:16px; }
+  .right { border-left:1px solid var(--border); overflow-y:auto; padding:16px; display:flex; flex-direction:column; gap:16px; }
+
+  /* ── CARDS ── */
+  .card {
+    background:var(--bg2); border:1px solid var(--border);
+    border-radius:8px; overflow:hidden;
+  }
+  .card-header {
+    padding:10px 16px; border-bottom:1px solid var(--border);
+    display:flex; align-items:center; justify-content:space-between;
+    font-size:12px; font-weight:700; color:var(--text2); letter-spacing:.6px; text-transform:uppercase;
+  }
+  .card-body { padding:16px; }
+
+  /* ── ACCOUNT SUMMARY ── */
+  .account-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; }
+  .acct-item .label { font-size:11px; color:var(--text2); margin-bottom:4px; }
+  .acct-item .value { font-size:18px; font-weight:700; }
+  .acct-item .sub   { font-size:11px; color:var(--text2); margin-top:2px; }
+
+  /* ── POSITIONS TABLE ── */
+  .pos-table { width:100%; border-collapse:collapse; }
+  .pos-table th {
+    padding:8px 10px; text-align:right; font-size:11px; font-weight:600;
+    color:var(--text2); border-bottom:1px solid var(--border);
+    white-space:nowrap;
+  }
+  .pos-table th:first-child { text-align:left; }
+  .pos-table td {
+    padding:10px 10px; text-align:right; font-size:12px;
+    border-bottom:1px solid var(--bg3); vertical-align:middle;
+  }
+  .pos-table td:first-child { text-align:left; }
+  .pos-table tr:last-child td { border-bottom:none; }
+  .pos-table tr:hover td { background:var(--bg3); }
+
+  .dir-badge {
+    display:inline-block; padding:2px 8px; border-radius:3px; font-size:11px; font-weight:700;
+  }
+  .dir-long  { background:rgba(14,203,129,.15); color:var(--green); }
+  .dir-short { background:rgba(246,70,93,.15);  color:var(--red); }
+
+  .liq-cell { display:flex; flex-direction:column; align-items:flex-end; gap:3px; }
+  .liq-price { color:var(--liq-red); font-weight:700; font-size:13px; }
+  .liq-dist-bar {
+    width:80px; height:5px; background:var(--bg4); border-radius:3px; overflow:hidden;
+  }
+  .liq-dist-fill { height:100%; border-radius:3px; transition:width .5s; }
+
+  .danger { animation:flash-danger 1s infinite; }
+  @keyframes flash-danger { 0%,100%{background:rgba(246,70,93,.1)} 50%{background:rgba(246,70,93,.25)} }
+
+  /* ── MARGIN RATIO GAUGE ── */
+  .margin-gauge { position:relative; height:4px; background:var(--bg4); border-radius:2px; width:60px; }
+  .margin-fill   { height:100%; border-radius:2px; transition:width .5s; }
+
+  /* ── CLOSED TRADES ── */
+  .trades-table { width:100%; border-collapse:collapse; }
+  .trades-table th {
+    padding:7px 8px; text-align:right; font-size:10px; font-weight:600;
+    color:var(--text2); border-bottom:1px solid var(--border); white-space:nowrap;
+  }
+  .trades-table th:first-child { text-align:left; }
+  .trades-table td {
+    padding:7px 8px; text-align:right; font-size:11px;
+    border-bottom:1px solid var(--bg3);
+  }
+  .trades-table td:first-child { text-align:left; }
+  .trades-table tr:last-child td { border-bottom:none; }
+
+  /* ── REGIME PANEL ── */
+  .regime-row { display:flex; justify-content:space-between; align-items:center; padding:5px 0; border-bottom:1px solid var(--bg3); }
+  .regime-row:last-child { border:none; }
+  .regime-row .k { color:var(--text2); font-size:12px; }
+  .regime-row .v { font-size:12px; font-weight:600; }
+  .conf-bar { height:6px; background:var(--bg4); border-radius:3px; overflow:hidden; margin-top:8px; }
+  .conf-fill { height:100%; border-radius:3px; transition:width .5s; }
+
+  /* ── STRATEGY FIT ── */
+  .fit-row { display:flex; align-items:center; gap:8px; padding:4px 0; }
+  .fit-row .fname { width:100px; font-size:11px; color:var(--text2); }
+  .fit-bar-bg { flex:1; height:6px; background:var(--bg4); border-radius:3px; overflow:hidden; }
+  .fit-bar-fg { height:100%; border-radius:3px; transition:width .4s; }
+  .fit-row .fval { width:30px; text-align:right; font-size:11px; font-weight:600; }
+
+  /* ── LOG ── */
+  #log-container {
+    height:200px; overflow-y:auto; font-family:'JetBrains Mono',monospace;
+    font-size:11px; line-height:1.6; padding:10px;
+    background:var(--bg); border-radius:4px;
+  }
+  .log-open   { color:#60aaff; }
+  .log-close  { color:var(--green); }
+  .log-liq    { color:var(--red); font-weight:700; }
+  .log-regime { color:var(--yellow); }
+  .log-cycle  { color:var(--text2); }
+  .log-err    { color:var(--red); }
+
+  /* ── TICKER TAPE ── */
+  .ticker-row {
+    display:flex; gap:32px; padding:8px 20px; background:var(--bg3);
+    border-bottom:1px solid var(--border); font-size:12px; overflow-x:auto;
+  }
+  .ticker-item { display:flex; gap:8px; align-items:center; white-space:nowrap; }
+  .ticker-item .tk { color:var(--text2); }
+
+  /* ── COLORS ── */
+  .green { color:var(--green) !important; }
+  .red   { color:var(--red)   !important; }
+  .yellow{ color:var(--yellow)!important; }
+  .blue  { color:var(--blue)  !important; }
+  .text2 { color:var(--text2) !important; }
+  .bold  { font-weight:700; }
+
+  /* ── MISTAKE SUMMARY ── */
+  .mistake-chip {
+    display:inline-flex; align-items:center; gap:4px;
+    padding:2px 8px; border-radius:12px; font-size:11px;
+    background:rgba(246,70,93,.15); color:var(--red); margin:2px;
+  }
+
+  /* Scrollbar */
+  ::-webkit-scrollbar { width:4px; height:4px; }
+  ::-webkit-scrollbar-track { background:var(--bg); }
+  ::-webkit-scrollbar-thumb { background:var(--bg4); border-radius:2px; }
+
+  .no-pos { padding:24px; text-align:center; color:var(--text3); font-size:13px; }
+  .tag { padding:2px 7px; border-radius:3px; font-size:10px; font-weight:700; display:inline-block; }
+  .tag-live { background:rgba(14,203,129,.2); color:var(--green); }
+  .tag-watch{ background:rgba(24,144,255,.15); color:var(--blue); }
+</style>
+</head>
+<body>
+
+<!-- TOP BAR -->
+<div class="topbar">
+  <div class="logo">🔥 ETH PAPER</div>
+  <div class="pair">ETH/USDT <span style="font-size:11px;color:var(--text2);font-weight:400">PERP</span></div>
+  <div class="mark-price" id="mark-price">—</div>
+  <div class="stat">
+    <span class="label">24h Change</span>
+    <span class="val" id="px-change">—</span>
+  </div>
+  <div class="stat">
+    <span class="label">Account Equity</span>
+    <span class="val" id="hdr-equity">—</span>
+  </div>
+  <div class="stat">
+    <span class="label">Unrealized PnL</span>
+    <span class="val" id="hdr-unreal">—</span>
+  </div>
+  <div class="stat">
+    <span class="label">Open Positions</span>
+    <span class="val" id="hdr-open">—</span>
+  </div>
+  <div class="stat">
+    <span class="label">Win Rate</span>
+    <span class="val" id="hdr-wr">—</span>
+  </div>
+  <div class="regime-badge" id="regime-badge">—</div>
+  <div class="refresh-dot" id="refresh-dot"></div>
+  <span style="font-size:11px;color:var(--text3)" id="last-updated">—</span>
+</div>
+
+<!-- TICKER STRIP -->
+<div class="ticker-row" id="ticker-row">
+  <div class="ticker-item"><span class="tk">Regime</span><span id="tk-regime">—</span></div>
+  <div class="ticker-item"><span class="tk">Confidence</span><span id="tk-conf">—</span></div>
+  <div class="ticker-item"><span class="tk">ADX</span><span id="tk-adx">—</span></div>
+  <div class="ticker-item"><span class="tk">RSI</span><span id="tk-rsi">—</span></div>
+  <div class="ticker-item"><span class="tk">Vol Regime</span><span id="tk-vol">—</span></div>
+  <div class="ticker-item"><span class="tk">HTF Bias</span><span id="tk-htf">—</span></div>
+  <div class="ticker-item"><span class="tk">Structure</span><span id="tk-struct">—</span></div>
+  <div class="ticker-item"><span class="tk">Lev Adj</span><span id="tk-levadj">—</span></div>
+  <div class="ticker-item"><span class="tk">Improve Δ</span><span id="tk-imp">—</span></div>
+  <div class="ticker-item"><span class="tk">Days Left</span><span id="tk-days">—</span></div>
+</div>
+
+<div class="main">
+<div class="left">
+
+  <!-- ACCOUNT SUMMARY -->
+  <div class="card">
+    <div class="card-header">Account Overview <span style="color:var(--red);font-size:11px" id="acct-liq-count"></span></div>
+    <div class="card-body">
+      <div class="account-grid">
+        <div class="acct-item">
+          <div class="label">Total Balance</div>
+          <div class="value" id="acct-equity">—</div>
+          <div class="sub" id="acct-ret">—</div>
+        </div>
+        <div class="acct-item">
+          <div class="label">Unrealized PnL</div>
+          <div class="value" id="acct-unreal">—</div>
+          <div class="sub" id="acct-unreal-pct">—</div>
+        </div>
+        <div class="acct-item">
+          <div class="label">Margin Used</div>
+          <div class="value" id="acct-margin-used">—</div>
+          <div class="sub" id="acct-heat">Portfolio Heat</div>
+        </div>
+        <div class="acct-item">
+          <div class="label">Total Fees Paid</div>
+          <div class="value" id="acct-fees">—</div>
+          <div class="sub" id="acct-trades-count">—</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- OPEN POSITIONS -->
+  <div class="card">
+    <div class="card-header">
+      Open Positions
+      <span id="pos-count" style="color:var(--blue)">0</span>
+    </div>
+    <div id="positions-wrap">
+      <div class="no-pos">No open positions</div>
+    </div>
+  </div>
+
+  <!-- CLOSED TRADES -->
+  <div class="card">
+    <div class="card-header">Trade History <span id="trade-count" style="color:var(--text2)"></span></div>
+    <div style="overflow-x:auto">
+      <table class="trades-table" id="trades-table">
+        <thead>
+          <tr>
+            <th style="text-align:left">Strategy</th>
+            <th>Dir</th>
+            <th>Entry</th>
+            <th>Exit</th>
+            <th>☠ Liq Price</th>
+            <th>Lev</th>
+            <th>Notional</th>
+            <th>Margin</th>
+            <th>Gross PnL</th>
+            <th>Fees</th>
+            <th>Net PnL</th>
+            <th>ROI %</th>
+            <th>Exit</th>
+            <th>Bars</th>
+          </tr>
+        </thead>
+        <tbody id="trades-body">
+          <tr><td colspan="14" class="no-pos">No closed trades yet</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+</div><!-- /left -->
+<div class="right">
+
+  <!-- REGIME -->
+  <div class="card">
+    <div class="card-header">Market Regime</div>
+    <div class="card-body">
+      <div style="font-size:20px;font-weight:700;margin-bottom:4px" id="r-name">—</div>
+      <div class="conf-bar"><div class="conf-fill" id="r-conf-bar"></div></div>
+      <div style="font-size:11px;color:var(--text2);margin-top:4px;margin-bottom:12px" id="r-conf-label">—</div>
+      <div class="regime-row"><span class="k">ADX</span><span class="v" id="r-adx">—</span></div>
+      <div class="regime-row"><span class="k">RSI</span><span class="v" id="r-rsi">—</span></div>
+      <div class="regime-row"><span class="k">Vol Regime</span><span class="v" id="r-vol">—</span></div>
+      <div class="regime-row"><span class="k">HTF Bias</span><span class="v" id="r-htf">—</span></div>
+      <div class="regime-row"><span class="k">Structure</span><span class="v" id="r-struct">—</span></div>
+      <div class="regime-row"><span class="k">Momentum</span><span class="v" id="r-mom">—</span></div>
+    </div>
+  </div>
+
+  <!-- STRATEGY FIT -->
+  <div class="card">
+    <div class="card-header">Strategy Fit — Current Regime</div>
+    <div class="card-body" id="strategy-fit-body">—</div>
+  </div>
+
+  <!-- STRATEGY LEADERBOARD -->
+  <div class="card">
+    <div class="card-header">Strategy Leaderboard</div>
+    <div id="leaderboard-body">
+      <div class="no-pos">No data yet</div>
+    </div>
+  </div>
+
+  <!-- MISTAKES -->
+  <div class="card">
+    <div class="card-header">Mistake Tracker</div>
+    <div class="card-body" id="mistakes-body">
+      <div style="padding:4px;color:var(--green);font-size:12px">No mistakes yet ✅</div>
+    </div>
+  </div>
+
+  <!-- LIVE LOG -->
+  <div class="card">
+    <div class="card-header">Live Log</div>
+    <div id="log-container"></div>
+  </div>
+
+</div><!-- /right -->
+</div><!-- /main -->
+
+<script>
+const $ = id => document.getElementById(id);
+let _prevPx = null;
+
+function fmt(n, dec=2) {
+  if (n==null || n==='' || isNaN(parseFloat(n))) return '—';
+  return parseFloat(n).toLocaleString('en-US',{minimumFractionDigits:dec,maximumFractionDigits:dec});
+}
+function fmtSigned(n, dec=2) {
+  if (n==null || isNaN(parseFloat(n))) return '—';
+  const v = parseFloat(n);
+  const s = Math.abs(v).toLocaleString('en-US',{minimumFractionDigits:dec,maximumFractionDigits:dec});
+  return (v>=0?'+':'-')+s;
+}
+function colorClass(v) { return parseFloat(v)>0?'green':parseFloat(v)<0?'red':'text2'; }
+
+function regimeColor(r) {
+  if (!r) return '#848e9c';
+  r = r.toUpperCase();
+  if (r.includes('STRONG_BULL')) return '#0ecb81';
+  if (r.includes('WEAK_BULL'))   return '#52c41a';
+  if (r.includes('CHOPPY_BULL')) return '#73d13d';
+  if (r.includes('STRONG_BEAR')) return '#f6465d';
+  if (r.includes('WEAK_BEAR'))   return '#ff7875';
+  if (r.includes('CHOPPY_BEAR')) return '#ff9c6e';
+  if (r.includes('RANG'))        return '#1890ff';
+  if (r.includes('VOLAT'))       return '#9c6ef8';
+  return '#848e9c';
+}
+
+function timeSince(iso) {
+  if (!iso) return '';
+  const diff = (Date.now() - new Date(iso)) / 1000;
+  if (diff < 60)   return Math.round(diff)+'s ago';
+  if (diff < 3600) return Math.round(diff/60)+'m ago';
+  return Math.round(diff/3600)+'h ago';
+}
+
+function renderPositions(positions, px) {
+  const wrap = $('positions-wrap');
+  const keys = Object.keys(positions||{});
+  $('pos-count').textContent = keys.length;
+
+  if (!keys.length) {
+    wrap.innerHTML = '<div class="no-pos">No open positions</div>';
+    $('acct-unreal').innerHTML = '<span>$0.00</span>';
+    $('acct-unreal-pct').textContent = '';
+    $('acct-margin-used').textContent = '$0.00';
+    return;
+  }
+
+  let totalMargin = 0, totalUnreal = 0;
+
+  let html = `<div style="overflow-x:auto"><table class="pos-table">
+    <thead><tr>
+      <th style="text-align:left">Strategy</th>
+      <th>Dir</th>
+      <th>Size</th>
+      <th>Entry</th>
+      <th>Mark Price</th>
+      <th>☠ Liq Price</th>
+      <th>Dist to Liq</th>
+      <th>SL / TP</th>
+      <th>Margin</th>
+      <th>Notional</th>
+      <th>Lev</th>
+      <th>Unrealized PnL</th>
+      <th>ROI %</th>
+      <th>Margin Ratio</th>
+      <th>Bars</th>
+    </tr></thead><tbody>`;
+
+  for (const key of keys) {
+    const p = positions[key];
+    const dir = p.direction === 1 ? 1 : -1;
+    const entryPx = parseFloat(p.entry_px)||0;
+    const liqPx   = parseFloat(p.liq_price)||0;
+    const bkPx    = parseFloat(p.bankruptcy_price)||0;
+    const markPx  = parseFloat(px)||entryPx;
+    const qty     = parseFloat(p.qty)||0;
+    const lev     = p.leverage||'—';
+    const notional= parseFloat(p.notional)||0;
+    const margin  = parseFloat(p.initial_margin)||0;
+
+    // Live distance to liq (recalc from mark price)
+    let dist = liqPx > 0 ? Math.abs((liqPx - markPx) / liqPx * 100) : parseFloat(p.dist_to_liq_pct)||0;
+    const mratio  = parseFloat(p.margin_ratio_pct)||0;
+    totalMargin  += margin;
+
+    // Live unrealized PnL
+    const unreal = dir * (markPx - entryPx) * qty;
+    const roiPct = margin > 0 ? (unreal / margin * 100) : 0;
+    totalUnreal += unreal;
+
+    // Colors
+    let distColor = '#0ecb81';
+    if (dist < 10) distColor = '#f6465d';
+    else if (dist < 20) distColor = '#f0b90b';
+
+    let mrColor = '#0ecb81';
+    if (mratio > 50) mrColor = '#f6465d';
+    else if (mratio > 25) mrColor = '#f0b90b';
+
+    const isDanger = dist < 8;
+    const rowClass = isDanger ? 'danger' : '';
+
+    html += `<tr class="${rowClass}">
+      <td>
+        <div style="font-weight:600;font-size:12px">${key}</div>
+        <div style="font-size:10px;color:var(--text3)">${p.regime_full||p.regime||''} &nbsp;·&nbsp; ${timeSince(p.opened_at)}</div>
+      </td>
+      <td><span class="dir-badge ${dir===1?'dir-long':'dir-short'}">${dir===1?'LONG':'SHORT'}</span></td>
+      <td style="font-weight:600">${fmt(qty,4)}</td>
+      <td style="font-family:monospace">${fmt(entryPx)}</td>
+      <td style="font-weight:700;font-family:monospace">${fmt(markPx)}</td>
+      <td>
+        <div class="liq-cell">
+          <span class="liq-price">$${fmt(liqPx)}</span>
+          <span style="font-size:10px;color:var(--text3)">Bk: $${fmt(bkPx)}</span>
+          ${isDanger ? '<span style="font-size:9px;color:var(--red);font-weight:700;animation:pulse 1s infinite">⚠ DANGER ZONE</span>' : ''}
+        </div>
+      </td>
+      <td>
+        <div class="liq-cell">
+          <span style="font-size:12px;color:${distColor};font-weight:700">${fmt(dist,1)}% away</span>
+          <div class="liq-dist-bar"><div class="liq-dist-fill" style="width:${Math.min(dist,100)}%;background:${distColor}"></div></div>
+        </div>
+      </td>
+      <td>
+        <div style="font-size:11px">SL <span style="color:var(--red);font-family:monospace">${fmt(p.sl_px)}</span></div>
+        <div style="font-size:11px">TP <span style="color:var(--green);font-family:monospace">${fmt(p.tp_px)}</span></div>
+      </td>
+      <td style="font-family:monospace">$${fmt(margin)}</td>
+      <td style="font-family:monospace">$${fmt(notional)}</td>
+      <td><span style="color:var(--yellow);font-weight:700">${lev}</span></td>
+      <td>
+        <div class="${colorClass(unreal)} bold" style="font-family:monospace">${fmtSigned(unreal)} USDT</div>
+      </td>
+      <td><span class="${colorClass(roiPct)} bold">${fmtSigned(roiPct,2)}%</span></td>
+      <td>
+        <div style="display:flex;flex-direction:column;align-items:flex-end;gap:2px">
+          <span style="font-size:11px;color:${mrColor};font-weight:600">${fmt(mratio,2)}%</span>
+          <div class="margin-gauge"><div class="margin-fill" style="width:${Math.min(mratio*2,100)}%;background:${mrColor}"></div></div>
+        </div>
+      </td>
+      <td style="color:var(--text2)">${p.bars_held||0}</td>
+    </tr>`;
+  }
+
+  html += '</tbody></table></div>';
+  wrap.innerHTML = html;
+
+  $('acct-unreal').innerHTML = `<span class="${colorClass(totalUnreal)}">${fmtSigned(totalUnreal)} USDT</span>`;
+  $('acct-unreal-pct').textContent = totalMargin>0 ? `${fmtSigned(totalUnreal/totalMargin*100,2)}% ROI on margin` : '';
+  $('acct-margin-used').textContent = '$'+fmt(totalMargin);
+}
+
+function renderTrades(closed) {
+  const tbody = $('trades-body');
+  if (!closed || !closed.length) {
+    tbody.innerHTML = '<tr><td colspan="14" class="no-pos">No closed trades yet</td></tr>';
+    return;
+  }
+  const rows = [...closed].reverse().slice(0,50);
+  tbody.innerHTML = rows.map(t => {
+    const net = parseFloat(t.net_pnl||t.pnl||0);
+    const gross = parseFloat(t.gross_pnl||0);
+    const fees = parseFloat(t.costs||0);
+    const roi = parseFloat(t.margin_return_pct||0);
+    const liq = parseFloat(t.liq_price||0);
+    const wasLiq = t.was_liquidated;
+    const reason = (t.exit_reason||'—').toLowerCase();
+    const reasonColor = wasLiq?'var(--red)':reason==='tp'?'var(--green)':reason==='sl'?'var(--red)':'var(--text2)';
+    const dir = (t.direction||t.dir||0);
+    return `<tr>
+      <td style="font-size:11px;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${t.key||'—'}</td>
+      <td><span class="dir-badge ${dir===1?'dir-long':'dir-short'}">${dir===1?'L':'S'}</span></td>
+      <td style="font-family:monospace">${fmt(t.entry_px)}</td>
+      <td style="font-family:monospace">${fmt(t.exit_px)}</td>
+      <td class="${wasLiq?'red':''}" style="font-weight:${wasLiq?700:400};font-family:monospace">${liq?'$'+fmt(liq):'—'}</td>
+      <td style="color:var(--yellow)">${t.leverage||'—'}</td>
+      <td style="font-family:monospace">$${fmt(t.notional)}</td>
+      <td style="font-family:monospace">$${fmt(t.initial_margin)}</td>
+      <td class="${colorClass(gross)}" style="font-family:monospace">${fmtSigned(gross)}</td>
+      <td style="color:var(--text2);font-family:monospace">-${fmt(fees,3)}</td>
+      <td class="${colorClass(net)} bold" style="font-family:monospace">${fmtSigned(net)}</td>
+      <td class="${colorClass(roi)} bold">${fmtSigned(roi,1)}%</td>
+      <td style="color:${reasonColor};font-weight:700;text-transform:uppercase;font-size:10px">${wasLiq?'🔥 LIQ':reason}</td>
+      <td style="color:var(--text2)">${t.bars_held||'—'}</td>
+    </tr>`;
+  }).join('');
+}
+
+function renderRegime(r) {
+  if (!r) return;
+  const name = r.regime||'—';
+  const conf = parseFloat(r.confidence||0);
+  const c = regimeColor(name);
+  const rEl = $('r-name');
+  rEl.textContent = name;
+  rEl.style.color = c;
+  $('r-conf-bar').style.width = conf+'%';
+  $('r-conf-bar').style.background = c;
+  $('r-conf-label').textContent = `Confidence: ${fmt(conf,1)}%`;
+  $('r-adx').textContent    = fmt(r.adx,1);
+  $('r-rsi').textContent    = fmt(r.rsi,1);
+  $('r-vol').textContent    = r.vol_regime||'—';
+  $('r-htf').textContent    = r.htf_bias||'—';
+  $('r-struct').textContent = r.market_structure||'—';
+  $('r-mom').textContent    = r.momentum||'—';
+  const rsiV = parseFloat(r.rsi);
+  $('r-rsi').style.color = rsiV<30?'var(--green)':rsiV>70?'var(--red)':'var(--text)';
+
+  // Ticker
+  $('tk-regime').innerHTML  = `<span style="color:${c};font-weight:700">${name}</span>`;
+  $('tk-conf').textContent   = fmt(conf,1)+'%';
+  $('tk-adx').textContent    = fmt(r.adx,1);
+  $('tk-rsi').textContent    = fmt(r.rsi,1);
+  $('tk-vol').textContent    = r.vol_regime||'—';
+  $('tk-htf').textContent    = r.htf_bias||'—';
+  $('tk-struct').textContent = r.market_structure||'—';
+
+  const badge = $('regime-badge');
+  badge.textContent = name;
+  badge.style.background = c+'22';
+  badge.style.color = c;
+  badge.style.border = `1px solid ${c}44`;
+}
+
+function renderStrategyFit(fit) {
+  const body = $('strategy-fit-body');
+  if (!fit || !Object.keys(fit).length) { body.innerHTML='<div style="color:var(--text3);font-size:12px">—</div>'; return; }
+  const colors = ['#0ecb81','#1890ff','#f0b90b','#9c6ef8','#ff8c00','#52c41a'];
+  let i=0;
+  body.innerHTML = Object.entries(fit).map(([k,v]) => {
+    const pct = Math.round(v*50);
+    const c = colors[i++%colors.length];
+    return `<div class="fit-row">
+      <span class="fname">${k.replace(/_/g,' ')}</span>
+      <div class="fit-bar-bg"><div class="fit-bar-fg" style="width:${pct}%;background:${c}"></div></div>
+      <span class="fval" style="color:${c}">${parseFloat(v).toFixed(1)}</span>
+    </div>`;
+  }).join('');
+}
+
+function renderLeaderboard(stratMap) {
+  const body = $('leaderboard-body');
+  const sorted = Object.entries(stratMap).sort((a,b)=>(b[1].total_pnl||0)-(a[1].total_pnl||0)).slice(0,15);
+  if (!sorted.length) { body.innerHTML='<div class="no-pos">No data</div>'; return; }
+  body.innerHTML = sorted.map(([k,v]) => {
+    const pnl = v.total_pnl||0;
+    const wr  = v.win_rate||0;
+    const n   = v.n||0;
+    return `<div style="display:flex;align-items:center;justify-content:space-between;padding:7px 12px;border-bottom:1px solid var(--bg3)">
+      <div style="display:flex;align-items:center;gap:6px">
+        <span class="tag ${v.is_open?'tag-live':'tag-watch'}">${v.is_open?'LIVE':'—'}</span>
+        <span style="font-size:11px">${k}</span>
+      </div>
+      <div style="display:flex;gap:12px;align-items:center">
+        <span style="font-size:10px;color:var(--text2)">${n}T &nbsp;${fmt(wr,0)}%WR</span>
+        <span class="${colorClass(pnl)} bold" style="font-size:12px">${fmtSigned(pnl)} USDT</span>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function renderMistakes(mistakeMap) {
+  const body = $('mistakes-body');
+  const entries = Object.entries(mistakeMap);
+  if (!entries.length) {
+    body.innerHTML = '<div style="padding:4px;color:var(--green);font-size:12px">No mistakes yet ✅</div>';
+    return;
+  }
+  body.innerHTML = entries.sort((a,b)=>b[1].count-a[1].count).map(([type, m]) =>
+    `<div style="display:flex;align-items:center;justify-content:space-between;padding:5px 0;border-bottom:1px solid var(--bg3)">
+      <span class="mistake-chip">⚠ ${type.replace(/_/g,' ')} ×${m.count}</span>
+      <span style="font-size:11px;color:var(--red)">${fmtSigned(m.total_loss||0)} USDT</span>
+    </div>`).join('');
+}
+
+function renderLog(raw) {
+  const el = $('log-container');
+  if (!raw) return;
+  const lines = raw.split('\n').filter(Boolean).slice(-150);
+  el.innerHTML = lines.map(line => {
+    let cls = 'log-cycle';
+    if (line.includes('OPENED'))       cls = 'log-open';
+    else if (line.includes('CLOSED'))  cls = 'log-close';
+    else if (line.includes('LIQUIDAT'))cls = 'log-liq';
+    else if (line.includes('[REGIME]')) cls = 'log-regime';
+    else if (line.includes('ERROR')||line.includes('error')) cls = 'log-err';
+    const esc = line.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    return `<div class="${cls}">${esc}</div>`;
+  }).join('');
+  el.scrollTop = el.scrollHeight;
+}
+
+function render() {
+  const D = window.__ETH_STATE__;
+  const L = window.__ETH_LOG__ || '';
+  if (!D) return;
+
+  const px = parseFloat(D.current_px)||0;
+
+  // Mark price with color flash
+  const mpEl = $('mark-price');
+  if (_prevPx && px && px !== _prevPx) {
+    mpEl.style.color = px > _prevPx ? 'var(--green)' : 'var(--red)';
+    setTimeout(() => mpEl.style.color = 'var(--text)', 800);
+  }
+  if (px) mpEl.textContent = '$'+fmt(px);
+  _prevPx = px || _prevPx;
+
+  // Account
+  const eq  = parseFloat(D.equity)||10000;
+  const ret = (eq/10000-1)*100;
+  $('acct-equity').textContent = '$'+fmt(eq);
+  $('acct-ret').innerHTML = `<span class="${colorClass(ret)}">${fmtSigned(ret,2)}% total return</span>`;
+  $('hdr-equity').textContent = '$'+fmt(eq);
+
+  const liqCount = D.n_liquidations||0;
+  $('acct-liq-count').textContent = liqCount ? `⚡ ${liqCount} Liquidation${liqCount>1?'s':''}` : '';
+
+  const fees = parseFloat(D.total_fees_paid||0);
+  $('acct-fees').textContent = '$'+fmt(fees,3);
+
+  const closed = D.closed||[];
+  const wins = closed.filter(t=>parseFloat(t.net_pnl||t.pnl||0)>0);
+  const wr   = closed.length ? (wins.length/closed.length*100) : 0;
+  $('hdr-wr').innerHTML = `<span class="${wr>=50?'green':wr>0?'yellow':'red'}">${fmt(wr,1)}%</span>`;
+  $('acct-trades-count').textContent = `${closed.length} closed trades`;
+
+  renderPositions(D.positions||{}, px);
+
+  // Header stats
+  const posArr = Object.values(D.positions||{});
+  const totalUnreal = posArr.reduce((s,p) => {
+    const dir = p.direction===1?1:-1;
+    return s + dir*(px-p.entry_px)*p.qty;
+  }, 0);
+  $('hdr-open').textContent = posArr.length;
+  $('hdr-unreal').innerHTML = `<span class="${colorClass(totalUnreal)}">${fmtSigned(totalUnreal)} USDT</span>`;
+
+  const totalMarginUsed = posArr.reduce((s,p)=>s+parseFloat(p.initial_margin||0),0);
+  const heat = eq>0 ? (totalMarginUsed/eq*100) : 0;
+  $('acct-heat').innerHTML = `Portfolio Heat: <span class="${heat>15?'red':heat>8?'yellow':'green'}">${fmt(heat,1)}%</span>`;
+
+  // Ticker extras
+  const gp = ((D.adaptive_state||{}).global_params)||{};
+  $('tk-levadj').textContent = (gp.current_leverage||3).toFixed(1)+'x';
+  $('tk-imp').innerHTML = `<span class="${colorClass(D.improvement_score||0)}">${fmtSigned(D.improvement_score||0,4)}</span>`;
+  if (D.started_at) {
+    const end = new Date(D.started_at); end.setDate(end.getDate()+7);
+    $('tk-days').textContent = Math.max(0,(end-Date.now())/86400000).toFixed(1);
+  }
+
+  renderRegime(D.regime||{});
+  renderStrategyFit((D.regime||{}).strategy_fit);
+  renderTrades(closed);
+
+  // Leaderboard from closed trades + open positions
+  const stratMap = {};
+  for (const t of closed) {
+    const k = t.key||'unknown';
+    if (!stratMap[k]) stratMap[k] = {n:0,wins:0,total_pnl:0,win_rate:0};
+    stratMap[k].n++;
+    const pnl = parseFloat(t.net_pnl||t.pnl||0);
+    if (pnl>0) stratMap[k].wins++;
+    stratMap[k].total_pnl += pnl;
+    stratMap[k].win_rate = stratMap[k].wins/stratMap[k].n*100;
+  }
+  for (const k of Object.keys(D.positions||{})) {
+    if (!stratMap[k]) stratMap[k]={n:0,wins:0,total_pnl:0,win_rate:0};
+    stratMap[k].is_open = true;
+  }
+  renderLeaderboard(stratMap);
+
+  // Mistakes from closed trades
+  const mistakeMap = {};
+  for (const t of closed) {
+    const mt = t.mistake_type;
+    if (mt && mt !== 'none') {
+      if (!mistakeMap[mt]) mistakeMap[mt]={count:0,total_loss:0};
+      mistakeMap[mt].count++;
+      const pnl = parseFloat(t.net_pnl||t.pnl||0);
+      if (pnl<0) mistakeMap[mt].total_loss += pnl;
+    }
+  }
+  renderMistakes(mistakeMap);
+  renderLog(L);
+
+  // Blink dot
+  const dot = $('refresh-dot');
+  dot.style.background='var(--yellow)';
+  setTimeout(()=>dot.style.background='var(--green)',300);
+  $('last-updated').textContent = 'Updated '+new Date().toLocaleTimeString();
+}
+
+function update() {
+  const tag = document.getElementById('_data_script');
+  if (tag) tag.remove();
+  const s = document.createElement('script');
+  s.id = '_data_script';
+  s.src = '/data.js?t='+Date.now();
+  s.onload = () => { try { render(); } catch(e){ console.error(e); } };
+  document.head.appendChild(s);
+}
+
+update();
+setInterval(update, 2000);
+</script>
+</body>
+</html>

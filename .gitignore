@@ -1,19 +1,47 @@
-# secrets
+# Secrets
 .env
 
-# runtime-generated files
+# Runtime state — don't track
+loop.pid
 state.json
 state.json.tmp
 discovered_addresses.json
 discovered_addresses.json.tmp
-bot.log
-*.log
 
-# python
+# Logs
+*.log
+bot.log
+
+# Python
 __pycache__/
 *.pyc
 *.pyo
 .venv/
 venv/
 *.egg-info/
+
+# macOS
+.DS_Store
+
+# Large data files (regenerated from Binance)
+data/*.parquet
+
+# Live runtime JSON (regenerated each run)
+paper_trades.json
+paper_trade_log.txt
+rl_state.json
+adaptive_state.json
+mistakes.json
+active_strategies.json
+discovered_strategies.json
+watchdog.log
+dashboard/paper_trades.json
+dashboard/paper_trade_log.txt
+
+# Results / reports (generated)
+results/
+
+# IDE
+.vscode/
+.idea/
 .gstack/

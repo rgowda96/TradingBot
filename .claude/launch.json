@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "eth-dashboard",
+      "runtimeExecutable": "/usr/bin/ruby",
+      "runtimeArgs": ["-run", "-e", "httpd", "/tmp/eth-dashboard", "-p", "7788"],
+      "port": 7788
+    }
+  ]
+}

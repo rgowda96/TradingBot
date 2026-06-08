@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(mkdir -p \"/Users/rakshaksgowda/Desktop/Eth Trading/.claude\")",
+      "Bash(ln -sf ../paper_trades.json paper_trades.json)",
+      "Bash(ln -sf ../paper_trade_log.txt paper_trade_log.txt)",
+      "mcp__Claude_Preview__preview_start",
+      "Read(//usr/bin/**)",
+      "Bash(python3 -c \"import sys; print\\(sys.executable\\)\")",
+      "Bash(ruby --version)",
+      "Bash(mkdir -p /tmp/eth-dashboard)",
+      "Bash(cp \"/Users/rakshaksgowda/Desktop/Eth Trading/dashboard/index.html\" /tmp/eth-dashboard/)",
+      "Read(//tmp/**)",
+      "Bash(cp \"/Users/rakshaksgowda/Desktop/Eth Trading/dashboard/index.html\" /tmp/eth-dashboard/index.html)",
+      "Bash(python3 -)"
+    ]
+  }
+}
