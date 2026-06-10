@@ -320,7 +320,7 @@ def _quality_filter(token_data, cfg, now):
     """Hard quality gate for the sub-$100K micro-cap tier.
 
     Every check targets a specific class of garbage:
-      age ≥ 14d          — past the initial rug window; two weeks of real price history
+      age ≥ 7d           — past the initial 48-72h rug window (config: min_pair_age_days)
       txns ≥ 75          — real organic community, not one whale and a few bots
       FDV/MCap ≤ 5×      — team didn't pre-mint 80% of supply to dump later
       website required   — bare-minimum public identity; ghost projects have no domain
@@ -1272,7 +1272,7 @@ def _conviction_score(token_state, token_data, now):
     where dims = {"organic": float, "tokenomics": float,
                   "maturity": float, "momentum": float}
 
-    Any dimension < _CONV_FLOOR (2.5) → overall = 0.0 (hard kill).
+    Any dimension < _CONV_FLOOR (2.0) → overall = 0.0 (hard kill).
 
     Examples:
       Legitimate 60d project:   organic=7.5 tok=9.1 mat=8.5 mom=7.5 → 8.08

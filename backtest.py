@@ -128,7 +128,7 @@ def safe_float(v, default=0.0) -> float:
 
 def simulate(prices: list, market_caps: list, volumes: list,
              min_mcap: float = 10_000, max_mcap: float = 1_000_000,
-             vol_surge_mult: float = 5.0, vol_window: int = 7,
+             vol_surge_mult: float = 8.0, vol_window: int = 7,
              breakout_pct: float = 0.05, breakout_window: int = 30) -> list:
     """Day-by-day signal simulation. Returns list of signal events."""
     signals    = []
@@ -415,7 +415,7 @@ def format_report(results: list, min_mcap: float, max_mcap: float, run_date: str
     lines.append("## 📈 Signal Performance — Catchable Tokens Only\n")
 
     for sig_type, label in [
-        ("volume_surge",        "Volume Surge  (5× vs 7d baseline)"),
+        ("volume_surge",        "Volume Surge  (8× vs 7d baseline)"),
         ("sleeping_giant",      "Sleeping Giant  (5× vs 30d quiet baseline)"),
         ("resistance_breakout", "Resistance Breakout  (new 30d high +5%)"),
     ]:

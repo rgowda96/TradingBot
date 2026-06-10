@@ -1,0 +1,128 @@
+[
+  {
+    "id": "virtual-protocol",
+    "name": "Virtuals Protocol (VIRTUAL)",
+    "chain": "base",
+    "category": "ai_agents",
+    "notes": "AI agent launchpad. Sub-$1M \u2192 $3B peak. DeFiLlama TVL was the lead signal.",
+    "error": "CoinGecko fetch failed",
+    "signals": []
+  },
+  {
+    "id": "aerodrome-finance",
+    "name": "Aerodrome Finance (AERO)",
+    "chain": "base",
+    "category": "defi_dex",
+    "notes": "Base's flagship DEX. Velodrome team (doxxed). TVL growth \u2192 price. Most catchable.",
+    "error": "CoinGecko fetch failed",
+    "signals": []
+  },
+  {
+    "id": "degen-base",
+    "name": "DEGEN (Farcaster tipping)",
+    "chain": "base",
+    "category": "social_token",
+    "notes": "Social tipping token on Farcaster. Narrative-driven. Community before price.",
+    "error": "CoinGecko fetch failed",
+    "signals": []
+  },
+  {
+    "id": "higher",
+    "name": "HIGHER",
+    "chain": "base",
+    "category": "cultural_meme",
+    "notes": "Cultural token. 'Only higher.' No utility. Pure community momentum.",
+    "error": "CoinGecko fetch failed",
+    "signals": []
+  },
+  {
+    "id": "aixbt-by-virtuals",
+    "name": "aixbt",
+    "chain": "base",
+    "category": "ai_agents",
+    "notes": "AI agent on Virtuals. Rode VIRTUAL's coattails. Co-narrative play.",
+    "error": "CoinGecko fetch failed",
+    "signals": []
+  },
+  {
+    "id": "brett",
+    "name": "BRETT",
+    "chain": "base",
+    "category": "meme",
+    "notes": "OG Base meme. Hit $700M peak. Pure momentum. Meme filter blocks this by design.",
+    "error": "CoinGecko fetch failed",
+    "signals": []
+  },
+  {
+    "id": "normie",
+    "name": "NORMIE",
+    "chain": "base",
+    "category": "meme",
+    "notes": "Base meme. $100M peak. Rug risk but also recovered. Meme filter blocks.",
+    "error": "CoinGecko fetch failed",
+    "signals": []
+  },
+  {
+    "id": "toshi",
+    "name": "TOSHI",
+    "chain": "base",
+    "category": "meme",
+    "notes": "Base cat meme. Coinbase cultural backing. Meme filter blocks.",
+    "error": "CoinGecko fetch failed",
+    "signals": []
+  },
+  {
+    "id": "dogwifhat",
+    "name": "dogwifhat (WIF)",
+    "chain": "solana",
+    "category": "meme",
+    "notes": "Solana dog meme. $4B peak. Impossible to catch via fundamentals.",
+    "error": "CoinGecko fetch failed",
+    "signals": []
+  },
+  {
+    "id": "bonk",
+    "name": "BONK",
+    "chain": "solana",
+    "category": "meme",
+    "notes": "Solana Christmas 2022 meme. $2B peak. Airdropped to Solana users.",
+    "error": "CoinGecko fetch failed",
+    "signals": []
+  },
+  {
+    "id": "jupiter-exchange-solana",
+    "name": "Jupiter (JUP)",
+    "chain": "solana",
+    "category": "defi_dex",
+    "notes": "Solana DEX aggregator. Real product, huge volume. Catchable via TVL/volume.",
+    "error": "CoinGecko fetch failed",
+    "signals": []
+  },
+  {
+    "id": "pyth-network",
+    "name": "Pyth Network (PYTH)",
+    "chain": "solana",
+    "category": "oracle",
+    "notes": "Oracle network. Jump Trading backing. Catchable via VC + TVL signal.",
+    "error": "CoinGecko fetch failed",
+    "signals": []
+  },
+  {
+    "id": "helium",
+    "name": "Helium (HNT)",
+    "chain": "solana",
+    "category": "depin",
+    "notes": "DePIN pioneer. Migrated to Solana. Real world device network. Catchable.",
+    "error": "CoinGecko fetch failed",
+    "signals": []
+  },
+  {
+    "id": "wen-4",
+    "name": "WEN",
+    "chain": "solana",
+    "category": "meme",
+    "notes": "Jupiter airdrop meme. $500M peak. Pure airdrop/momentum play.",
+    "error": "CoinGecko fetch failed",
+    "signals": []
+  }
+]
