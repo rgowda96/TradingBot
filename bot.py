@@ -922,7 +922,7 @@ def _coingecko_enrich(token_addr):
 #   • (10, 10, 10,  3) → 7.40  vs additive 8.25  (penalized for weak dimension)
 #   • (10, 10,  3, 10) → 7.40  (doesn't matter WHICH dimension is weak)
 #   • (7,   7,  7,  7) → 7.00  (balanced is rewarded, unbalanced is not)
-#   • Any dimension < 2.5 → hard floor → returns 0.0
+#   • Any dimension < 2.0 → hard floor → returns 0.0
 #
 # The ONLY way to score HIGH (≥7) is to be genuinely strong in ALL four areas.
 #
@@ -1288,7 +1288,7 @@ def _conviction_score(token_state, token_data, now):
     dims = {"organic": d_org, "tokenomics": d_tok,
             "maturity": d_mat, "momentum": d_mom}
 
-    # Hard floor: ANY dimension below 2.5 → the alert is not credible.
+    # Hard floor: ANY dimension below 2.0 → the alert is not credible.
     if min(d_org, d_tok, d_mat, d_mom) < _CONV_FLOOR:
         return 0.0, dims
 

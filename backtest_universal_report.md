@@ -1,5 +1,5 @@
 # 📡 Universal Backtest Report — All Chains, All Pools
-**Generated:** 2026-06-10 03:06 UTC
+**Generated:** 2026-06-11 03:07 UTC
 **Total pools in DB:** 0  (0 analysed, 0 skipped)
 **Networks covered:** base, solana, eth, arbitrum, optimism, bsc, polygon_pos
 
